@@ -1,0 +1,36 @@
+# --- Local environment / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Compiled binaries / build output ---
+/bin/
+/portal
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# --- Test & coverage artifacts ---
+*.out
+*.test
+coverage.*
+cover.html
+
+# --- Go ---
+# Module cache / workspace files that shouldn't be committed.
+go.work
+go.work.sum
+vendor/
+
+# --- Editor / IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- OS noise ---
+.DS_Store
+Thumbs.db

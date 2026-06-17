@@ -1,0 +1,58 @@
+# Local end-to-end stack: the Go portal + a pre-provisioned Keycloak.
+#
+# IMPORTANT — one-time host setup:
+#   Add this line to /etc/hosts so the "keycloak" hostname resolves both inside
+#   the containers AND in your browser (the OIDC issuer must be identical for
+#   both, or token validation fails):
+#
+#     127.0.0.1   keycloak
+#
+# Then:  docker compose up --build
+#   Portal:          http://localhost:3000
+#   Keycloak admin:  http://keycloak:8080  (admin / admin)
+#   Test users:      alice / password  (admin role),  bob / password  (user role)
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Pin the public hostname so the token issuer is stable and identical for
+      # the browser and the portal container.
+      KC_HOSTNAME: http://keycloak:8080
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    healthcheck:
+      # Keycloak's image has no curl; use bash's /dev/tcp against the health port.
+      test:
+        - CMD-SHELL
+        - "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  portal:
+    build: .
+    environment:
+      # Discovery + browser both reach Keycloak at the same URL (see /etc/hosts note).
+      KEYCLOAK_ISSUER: http://keycloak:8080/realms/portal
+      OIDC_CLIENT_ID: keycloak-portal
+      OIDC_CLIENT_SECRET: local-dev-secret
+      OIDC_REDIRECT_URL: http://localhost:3000/auth/callback
+      OIDC_POST_LOGOUT_REDIRECT_URL: http://localhost:3000/
+      OIDC_SCOPES: openid profile email roles
+      LISTEN_ADDR: ":3000"
+      COOKIE_SECURE: "false"
+    ports:
+      - "3000:3000"
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    restart: unless-stopped

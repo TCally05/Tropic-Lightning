@@ -1,0 +1,81 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strings"
+)
+
+// Config holds all runtime configuration, populated from environment variables.
+type Config struct {
+	// ListenAddr is the address the HTTP server binds to, e.g. ":3000".
+	ListenAddr string
+
+	// Issuer is the Keycloak realm issuer URL, e.g.
+	// http://localhost:8080/realms/myrealm
+	Issuer string
+
+	// ClientID / ClientSecret identify this application as a Keycloak client.
+	ClientID     string
+	ClientSecret string
+
+	// RedirectURL is the OIDC callback URL registered in Keycloak, e.g.
+	// http://localhost:3000/auth/callback
+	RedirectURL string
+
+	// PostLogoutRedirectURL is where Keycloak sends the browser after logout.
+	PostLogoutRedirectURL string
+
+	// Scopes requested during the authorization code flow. "openid" is required;
+	// "roles" makes Keycloak include realm/client roles in the tokens.
+	Scopes []string
+
+	// CookieSecure controls the Secure flag on the session cookie. Disable only
+	// for local HTTP development.
+	CookieSecure bool
+}
+
+// Load reads configuration from the environment and validates required fields.
+func Load() (*Config, error) {
+	cfg := &Config{
+		ListenAddr:            envOr("LISTEN_ADDR", ":3000"),
+		Issuer:                os.Getenv("KEYCLOAK_ISSUER"),
+		ClientID:              os.Getenv("OIDC_CLIENT_ID"),
+		ClientSecret:          os.Getenv("OIDC_CLIENT_SECRET"),
+		RedirectURL:           envOr("OIDC_REDIRECT_URL", "http://localhost:3000/auth/callback"),
+		PostLogoutRedirectURL: envOr("OIDC_POST_LOGOUT_REDIRECT_URL", "http://localhost:3000/"),
+		Scopes:                splitScopes(envOr("OIDC_SCOPES", "openid profile email roles")),
+		CookieSecure:          envOr("COOKIE_SECURE", "false") == "true",
+	}
+
+	var missing []string
+	if cfg.Issuer == "" {
+		missing = append(missing, "KEYCLOAK_ISSUER")
+	}
+	if cfg.ClientID == "" {
+		missing = append(missing, "OIDC_CLIENT_ID")
+	}
+	if cfg.ClientSecret == "" {
+		missing = append(missing, "OIDC_CLIENT_SECRET")
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	}
+
+	return cfg, nil
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func splitScopes(s string) []string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return []string{"openid"}
+	}
+	return fields
+}

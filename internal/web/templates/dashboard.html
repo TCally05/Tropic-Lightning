@@ -1,0 +1,54 @@
+{{define "dashboard.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard · Keycloak Portal</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 4rem auto; padding: 0 1rem; color: #1a1a2e; }
+    .card { border: 1px solid #e0e0e0; border-radius: 12px; padding: 2rem; margin-bottom: 1.5rem; }
+    .pill { display: inline-block; background: #eef0ff; color: #4636f5; padding: .25rem .7rem; border-radius: 999px; margin: .15rem; font-size: .85rem; font-weight: 600; }
+    .admin { background: #fff0f0; color: #d63031; padding: .5rem 1rem; border-radius: 8px; }
+    .muted { color: #777; }
+    .btn { display: inline-block; background: #fff; color: #4636f5; border: 1px solid #4636f5; padding: .5rem 1rem; border-radius: 8px; text-decoration: none; cursor: pointer; font: inherit; }
+    h1 { margin-top: 0; }
+    code { background: #f4f4f8; padding: .1rem .35rem; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Welcome, {{.Username}}</h1>
+    {{if .Email}}<p class="muted">{{.Email}}</p>{{end}}
+    {{if .IsAdmin}}<p class="admin">★ You hold the <strong>admin</strong> realm role.</p>{{end}}
+    <form method="POST" action="/auth/logout"><button class="btn" type="submit">Sign out</button></form>
+  </div>
+
+  <div class="card">
+    <h2>Realm roles</h2>
+    {{if .RealmRoles}}
+      {{range .RealmRoles}}<span class="pill">{{.}}</span>{{end}}
+    {{else}}
+      <p class="muted">No realm roles assigned.</p>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <h2>Client roles</h2>
+    {{if .ClientRoles}}
+      {{range $client, $roles := .ClientRoles}}
+        <p><strong>{{$client}}</strong><br>
+        {{range $roles}}<span class="pill">{{.}}</span>{{end}}</p>
+      {{end}}
+    {{else}}
+      <p class="muted">No client roles assigned.</p>
+    {{end}}
+  </div>
+
+  <div class="card">
+    <h2>API</h2>
+    <p>The same token works for the JSON API. Try:</p>
+    <p><code>GET /api/me</code> — your verified claims (any authenticated user)<br>
+       <code>GET /api/admin</code> — requires the <code>admin</code> realm role</p>
+  </div>
+</body>
+</html>{{end}}
