@@ -225,6 +225,66 @@ func (s *Service) DeleteRow(ctx context.Context, collection, id string) error {
 	return s.store.DeleteRow(ctx, collection, id)
 }
 
+// RowEdit is one row in a bulk save: an existing row (ID set) to update, or a
+// new row (ID empty) to add.
+type RowEdit struct {
+	ID     string            `json:"id"`
+	Fields map[string]string `json:"fields"`
+}
+
+// BulkResult reports what a bulk save changed.
+type BulkResult struct {
+	Added   int `json:"added"`
+	Updated int `json:"updated"`
+	Deleted int `json:"deleted"`
+}
+
+// BulkSave applies many row edits in one call: delete the given IDs, update
+// existing rows, and add new ones. Only the current columns are kept; entirely
+// empty new rows are skipped. Meta is read once.
+func (s *Service) BulkSave(ctx context.Context, collection string, rows []RowEdit, deletes []string) (BulkResult, error) {
+	_, cols, err := s.store.Meta(ctx, collection)
+	if err != nil {
+		return BulkResult{}, err
+	}
+	var res BulkResult
+	for _, id := range deletes {
+		if id == "" {
+			continue
+		}
+		if err := s.store.DeleteRow(ctx, collection, id); err != nil {
+			return res, err
+		}
+		res.Deleted++
+	}
+	for _, r := range rows {
+		fields := make(map[string]string, len(cols))
+		empty := true
+		for _, c := range cols {
+			v := strings.TrimSpace(r.Fields[c])
+			fields[c] = v
+			if v != "" {
+				empty = false
+			}
+		}
+		if r.ID != "" {
+			if err := s.store.PutRow(ctx, collection, r.ID, fields); err != nil {
+				return res, err
+			}
+			res.Updated++
+			continue
+		}
+		if empty {
+			continue // skip blank new rows
+		}
+		if err := s.store.PutRow(ctx, collection, "r"+uuid.NewString(), fields); err != nil {
+			return res, err
+		}
+		res.Added++
+	}
+	return res, nil
+}
+
 // slug normalises a name into a safe collection suffix.
 func slug(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))

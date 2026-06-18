@@ -65,17 +65,18 @@
     </form>
     {{if $edit}}
       <a class="toggle on" href="/datasets/{{$coll}}{{if $fq}}?{{slice $fq 1}}{{end}}">✓ Done editing</a>
-      <span class="muted">Editing: change any cell and click Save on that row. New column values can be filled here.</span>
+      <button type="button" onclick="addRow()" style="background:#fff;color:#1c9d52;border:1px solid #1c9d52;border-radius:6px;padding:.35rem .8rem;font:inherit;cursor:pointer;margin-right:.5rem;">+ Add row</button>
+      <button type="button" onclick="saveAll()" style="background:#1c9d52;color:#fff;border:none;border-radius:6px;padding:.35rem 1rem;font:inherit;font-weight:600;cursor:pointer;">Save all changes</button>
+      <span id="savestatus" class="muted" style="margin-left:.6rem;"></span>
+      <p class="muted" style="margin:.5rem 0 0;">Edit any cells, add or remove rows, then click <strong>Save all changes</strong> once.</p>
     {{else}}
       <a class="toggle" href="/datasets/{{$coll}}?edit=1{{$fq}}">✎ Edit rows</a>
-      <span class="muted">Add/delete columns and rows. Switch to <em>Edit rows</em> to change existing values.</span>
+      <span class="muted">Switch to <em>Edit rows</em> to add rows and change values in bulk, then save once.</span>
     {{end}}
   </div>
 
   <div class="card">
     <p class="muted">{{len .Columns}} columns · {{.Total}}{{if .FilterActive}} matching of {{.GrandTotal}}{{end}} rows{{if lt .Shown .Total}} (showing first {{.Shown}}){{end}} · stored as a peat dataset.</p>
-    <form method="POST" action="/datasets/{{$coll}}/rows/add?{{$bq}}" id="addrow"></form>
-    {{if $edit}}{{range .Rows}}<form id="row-{{.ID}}" method="POST" action="/datasets/{{$coll}}/rows/update?{{$bq}}"><input type="hidden" name="id" value="{{.ID}}"></form>{{end}}{{end}}
     <div class="wrap">
     <table>
       <thead>
@@ -92,19 +93,13 @@
           <th></th>
         </tr>
       </thead>
-      <tbody>
+      <tbody id="rows">
         {{range .Rows}}
         {{$row := .}}
-        <tr>
+        <tr class="drow" data-id="{{$row.ID}}">
           {{if $edit}}
-            {{range $cols}}<td><input form="row-{{$row.ID}}" type="text" name="f_{{.}}" value="{{index $row.Fields .}}" style="width:100%; box-sizing:border-box; padding:.25rem; border:1px solid #ccc; border-radius:4px;"></td>{{end}}
-            <td style="white-space:nowrap;">
-              <button form="row-{{$row.ID}}" type="submit" style="background:#1c9d52;color:#fff;border:none;border-radius:6px;padding:.15rem .6rem;font:inherit;font-size:.78rem;cursor:pointer;">Save</button>
-              <form method="POST" action="/datasets/{{$coll}}/rows/delete?{{$bq}}" style="display:inline;" onsubmit="return confirm('Delete this row?');">
-                <input type="hidden" name="id" value="{{$row.ID}}">
-                <button type="submit" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Delete</button>
-              </form>
-            </td>
+            {{range $cols}}<td><input class="cell" data-col="{{.}}" value="{{index $row.Fields .}}" style="width:100%; box-sizing:border-box; padding:.25rem; border:1px solid #ccc; border-radius:4px;"></td>{{end}}
+            <td><button type="button" onclick="removeRow(this)" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Remove</button></td>
           {{else}}
             {{range $cols}}<td>{{index $row.Fields .}}</td>{{end}}
             <td>
@@ -116,16 +111,65 @@
           {{end}}
         </tr>
         {{end}}
-        {{if .Columns}}
-        <tr>
-          {{range .Columns}}<td><input form="addrow" type="text" name="f_{{.}}" placeholder="{{.}}" style="width:100%; box-sizing:border-box; padding:.25rem; border:1px solid #ccc; border-radius:4px;"></td>{{end}}
-          <td><button form="addrow" type="submit" style="background:#1c9d52;color:#fff;border:none;border-radius:6px;padding:.2rem .6rem;font:inherit;font-size:.78rem;cursor:pointer;">+ Add</button></td>
-        </tr>
-        {{end}}
       </tbody>
     </table>
     </div>
-    {{if not .Rows}}<p class="muted">No rows yet — add one above.</p>{{end}}
+    {{if not .Rows}}<p class="muted">No rows yet{{if $edit}} — click “+ Add row”{{else}} — switch to Edit rows to add some{{end}}.</p>{{end}}
   </div>
+
+  {{if $edit}}
+  <template id="rowtmpl">
+    <tr class="drow" data-id="">
+      {{range $cols}}<td><input class="cell" data-col="{{.}}" style="width:100%; box-sizing:border-box; padding:.25rem; border:1px solid #ccc; border-radius:4px;"></td>{{end}}
+      <td><button type="button" onclick="removeRow(this)" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Remove</button></td>
+    </tr>
+  </template>
+  <script>
+    var BULK = "/datasets/" + {{$coll}} + "/bulk";
+    var rowsBody = document.getElementById('rows');
+    rowsBody.addEventListener('input', function(e){
+      var tr = e.target.closest('.drow'); if (tr) tr.dataset.dirty = '1';
+    });
+    function addRow(){
+      var clone = document.getElementById('rowtmpl').content.firstElementChild.cloneNode(true);
+      clone.dataset.dirty = '1';
+      rowsBody.appendChild(clone);
+      var i = clone.querySelector('input'); if (i) i.focus();
+    }
+    function removeRow(btn){
+      var tr = btn.closest('.drow');
+      if (tr.dataset.id){ tr.dataset.del = '1'; tr.style.display = 'none'; }
+      else { tr.remove(); }
+    }
+    function fieldsOf(tr){
+      var f = {};
+      tr.querySelectorAll('input.cell').forEach(function(inp){ f[inp.getAttribute('data-col')] = inp.value; });
+      return f;
+    }
+    async function saveAll(){
+      var rows = [], deletes = [], st = document.getElementById('savestatus');
+      document.querySelectorAll('#rows .drow').forEach(function(tr){
+        var id = tr.dataset.id || '';
+        if (tr.dataset.del === '1'){ if (id) deletes.push(id); return; }
+        if (id && tr.dataset.dirty !== '1') return;        // unchanged existing row
+        if (!id){
+          var f = fieldsOf(tr);
+          var any = Object.keys(f).some(function(k){ return f[k].trim() !== ''; });
+          if (!any) return;                                 // skip blank new row
+          rows.push({id:'', fields:f}); return;
+        }
+        rows.push({id:id, fields: fieldsOf(tr)});
+      });
+      if (rows.length === 0 && deletes.length === 0){ st.textContent = 'No changes.'; return; }
+      st.textContent = 'Saving…';
+      try {
+        var r = await fetch(BULK, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({rows:rows, deletes:deletes})});
+        var d = await r.json();
+        if (!r.ok){ st.textContent = 'Error: ' + (d.error || r.status); return; }
+        location.reload();
+      } catch(e){ st.textContent = 'Error: ' + e; }
+    }
+  </script>
+  {{end}}
 </body>
 </html>{{end}}
