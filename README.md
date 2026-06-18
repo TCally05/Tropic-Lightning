@@ -124,17 +124,19 @@ The config is `{type, group_by (category/x), value_col (number), agg}`, stored
 per dataset in the operator registry and captured by saved views (so a view can
 pin a specific chart). Chart math lives in `internal/web/charts.go`.
 
-### Mesh discovery (synced datasets join the catalog)
+### Mesh discovery (synced data sources join the catalog)
 
-peat syncs document collections across the mesh, so a dataset created on another
-node can land in this node's peat without the app having any local record of it.
-**Discovery** closes that gap: the app enumerates the node's collections
-(`ListCollectionConfigs`) and registers any that carry a dataset `__meta__` doc
-(skipping system collections) into the catalog, so users can subscribe to them.
-It runs automatically during catalog reconcile and on demand via **Sync from
-mesh** on `/catalog`. Dataset collections are tagged with a collection config on
-create so they're enumerable mesh-wide. Lives in `dataset.Discover` +
-`reconcileDatasets`.
+peat syncs document collections across the mesh, so a data source created on
+another node can land in this node's peat without the app having a local catalog
+record. **Discovery** closes that gap using the peat **document API**: the synced
+`data_sources` collection is the cross-node list of sources (read via
+`ListDocuments` + `GetDocument`), so reconcile reads it and registers each
+dataset-backed source into the catalog. Before surfacing one it confirms the
+dataset's data actually arrived with `GetDocument(<collection>, "__meta__")`
+(`dataset.Exists`) — so a source whose rows haven't synced yet isn't shown as
+subscribable. Runs automatically during catalog reconcile and on demand via
+**Sync from mesh** on `/catalog` (reports how many new sources it found). Lives in
+`reconcileDatasets` + `dataset.Exists`.
 
 ### Subscriptions (self-serve access)
 
@@ -300,7 +302,7 @@ cluster), not part of this package.
 
 ```bash
 # Build the image, then create the package (pulls the image from your daemon).
-docker build -t keycloak-portal:0.1.29 .
+docker build -t keycloak-portal:0.1.30 .
 zarf package create deploy/zarf --confirm
 
 # On the target cluster (must be `zarf init`-ed), deploy with your values:
@@ -333,7 +335,7 @@ and the UDS Operator takes over the wiring:
   node and Keycloak.
 
 ```bash
-docker build -t keycloak-portal:0.1.29 .
+docker build -t keycloak-portal:0.1.30 .
 zarf package create deploy/zarf --confirm --output deploy/zarf
 uds create deploy/uds --confirm
 uds deploy uds-bundle-keycloak-portal-*.tar.zst --confirm \
