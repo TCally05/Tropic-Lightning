@@ -190,3 +190,29 @@ func TestEditColumnsAndRows(t *testing.T) {
 		t.Errorf("rows after delete = %d, want 1", len(rows))
 	}
 }
+
+func TestUpdateRowPopulatesNewColumn(t *testing.T) {
+	store := NewMemoryStore()
+	svc := NewService(store, nil, nil)
+	ctx := context.Background()
+	token, _, _ := svc.Stage("d.csv", []byte("name\nAlice\n"))
+	res, _ := svc.Import(ctx, token, "D", []string{"name"})
+	c := res.Collection
+	_ = svc.AddColumn(ctx, c, "status")
+
+	_, _, rows, _ := svc.View(ctx, c)
+	id := rows[0].ID
+	if err := svc.UpdateRow(ctx, c, id, map[string]string{"name": "Alice", "status": "sick", "junk": "x"}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	_, _, rows, _ = svc.View(ctx, c)
+	if rows[0].Fields["status"] != "sick" {
+		t.Errorf("status not updated: %+v", rows[0].Fields)
+	}
+	if _, ok := rows[0].Fields["junk"]; ok {
+		t.Error("unknown field should be ignored")
+	}
+	if err := svc.UpdateRow(ctx, c, "", nil); err == nil {
+		t.Error("empty id should error")
+	}
+}

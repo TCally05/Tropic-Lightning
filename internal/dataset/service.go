@@ -203,6 +203,23 @@ func (s *Service) AddRow(ctx context.Context, collection string, values map[stri
 	return s.store.PutRow(ctx, collection, "r"+uuid.NewString(), fields)
 }
 
+// UpdateRow overwrites an existing row's values for the current columns (so a
+// newly-added column can be populated). Unknown keys are ignored.
+func (s *Service) UpdateRow(ctx context.Context, collection, id string, values map[string]string) error {
+	if id == "" {
+		return fmt.Errorf("row id is required")
+	}
+	_, cols, err := s.store.Meta(ctx, collection)
+	if err != nil {
+		return err
+	}
+	fields := make(map[string]string, len(cols))
+	for _, c := range cols {
+		fields[c] = strings.TrimSpace(values[c])
+	}
+	return s.store.PutRow(ctx, collection, id, fields)
+}
+
 // DeleteRow removes a row by ID.
 func (s *Service) DeleteRow(ctx context.Context, collection, id string) error {
 	return s.store.DeleteRow(ctx, collection, id)

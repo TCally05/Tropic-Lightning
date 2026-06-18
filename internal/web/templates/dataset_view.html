@@ -10,6 +10,9 @@
     h1 { margin-top: 0; }
     .muted { color: #777; }
     .ok { background:#e6f7ed; color:#1c7a44; padding:.6rem 1rem; border-radius:8px; }
+    .err { background:#fff0f0; color:#d63031; padding:.6rem 1rem; border-radius:8px; }
+    .toggle { display:inline-block; text-decoration:none; border:1px solid #4636f5; color:#4636f5; padding:.35rem .8rem; border-radius:6px; margin-right:1rem; }
+    .toggle.on { background:#4636f5; color:#fff; }
     table { width:100%; border-collapse:collapse; margin-top:.5rem; font-size:.82rem; }
     th, td { text-align:left; padding:.35rem .5rem; border-bottom:1px solid #eee; white-space:nowrap; }
     th { position:sticky; top:0; background:#fafafe; }
@@ -43,27 +46,44 @@
     </form>
   </div>
 
+  {{$coll := .Collection}}
+  {{$bq := .BackQuery}}
+  {{$cols := .Columns}}
+  {{$edit := .EditMode}}
+  {{/* reconstruct the filter querystring (without edit) for the toggle links */}}
+  {{$fq := ""}}
+  {{if .FilterCol}}{{$fq = printf "&col=%s" (urlquery .FilterCol)}}{{end}}
+  {{if .FilterVal}}{{$fq = printf "%s&val=%s" $fq (urlquery .FilterVal)}}{{end}}
+  {{if .FilterQuery}}{{$fq = printf "%s&q=%s" $fq (urlquery .FilterQuery)}}{{end}}
+
   <div class="card">
     <h2 style="margin-top:0;">Edit</h2>
-    <form method="POST" action="/datasets/{{.Collection}}/columns/add" style="display:inline-flex; gap:.4rem; align-items:center; margin-right:1rem;">
+    {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+    <form method="POST" action="/datasets/{{$coll}}/columns/add?{{$bq}}" style="display:inline-flex; gap:.4rem; align-items:center; margin-right:1rem;">
       <input type="text" name="name" placeholder="new column name" style="padding:.3rem; border:1px solid #ccc; border-radius:6px;">
       <button type="submit" style="background:#4636f5;color:#fff;border:none;padding:.35rem .8rem;border-radius:6px;font:inherit;cursor:pointer;">+ Column</button>
     </form>
-    <span class="muted">Add/delete columns and rows below. Changes save to the peat mesh.</span>
+    {{if $edit}}
+      <a class="toggle on" href="/datasets/{{$coll}}{{if $fq}}?{{slice $fq 1}}{{end}}">✓ Done editing</a>
+      <span class="muted">Editing: change any cell and click Save on that row. New column values can be filled here.</span>
+    {{else}}
+      <a class="toggle" href="/datasets/{{$coll}}?edit=1{{$fq}}">✎ Edit rows</a>
+      <span class="muted">Add/delete columns and rows. Switch to <em>Edit rows</em> to change existing values.</span>
+    {{end}}
   </div>
 
   <div class="card">
     <p class="muted">{{len .Columns}} columns · {{.Total}}{{if .FilterActive}} matching of {{.GrandTotal}}{{end}} rows{{if lt .Shown .Total}} (showing first {{.Shown}}){{end}} · stored as a peat dataset.</p>
-    <form method="POST" action="/datasets/{{.Collection}}/rows/add" id="addrow"></form>
+    <form method="POST" action="/datasets/{{$coll}}/rows/add?{{$bq}}" id="addrow"></form>
+    {{if $edit}}{{range .Rows}}<form id="row-{{.ID}}" method="POST" action="/datasets/{{$coll}}/rows/update?{{$bq}}"><input type="hidden" name="id" value="{{.ID}}"></form>{{end}}{{end}}
     <div class="wrap">
     <table>
       <thead>
         <tr>
-          {{$coll := .Collection}}
           {{range .Columns}}
           <th>
             {{.}}
-            <form method="POST" action="/datasets/{{$coll}}/columns/delete" style="display:inline;" onsubmit="return confirm('Delete column {{.}}? This removes its values.');">
+            <form method="POST" action="/datasets/{{$coll}}/columns/delete?{{$bq}}" style="display:inline;" onsubmit="return confirm('Delete column {{.}}? This removes its values.');">
               <input type="hidden" name="name" value="{{.}}">
               <button type="submit" title="delete column" style="border:none;background:none;color:#d63031;cursor:pointer;font-weight:700;">×</button>
             </form>
@@ -73,17 +93,27 @@
         </tr>
       </thead>
       <tbody>
-        {{$cols := .Columns}}
         {{range .Rows}}
         {{$row := .}}
         <tr>
-          {{range $cols}}<td>{{index $row.Fields .}}</td>{{end}}
-          <td>
-            <form method="POST" action="/datasets/{{$coll}}/rows/delete" style="display:inline;" onsubmit="return confirm('Delete this row?');">
-              <input type="hidden" name="id" value="{{$row.ID}}">
-              <button type="submit" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Delete</button>
-            </form>
-          </td>
+          {{if $edit}}
+            {{range $cols}}<td><input form="row-{{$row.ID}}" type="text" name="f_{{.}}" value="{{index $row.Fields .}}" style="width:100%; box-sizing:border-box; padding:.25rem; border:1px solid #ccc; border-radius:4px;"></td>{{end}}
+            <td style="white-space:nowrap;">
+              <button form="row-{{$row.ID}}" type="submit" style="background:#1c9d52;color:#fff;border:none;border-radius:6px;padding:.15rem .6rem;font:inherit;font-size:.78rem;cursor:pointer;">Save</button>
+              <form method="POST" action="/datasets/{{$coll}}/rows/delete?{{$bq}}" style="display:inline;" onsubmit="return confirm('Delete this row?');">
+                <input type="hidden" name="id" value="{{$row.ID}}">
+                <button type="submit" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Delete</button>
+              </form>
+            </td>
+          {{else}}
+            {{range $cols}}<td>{{index $row.Fields .}}</td>{{end}}
+            <td>
+              <form method="POST" action="/datasets/{{$coll}}/rows/delete?{{$bq}}" style="display:inline;" onsubmit="return confirm('Delete this row?');">
+                <input type="hidden" name="id" value="{{$row.ID}}">
+                <button type="submit" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Delete</button>
+              </form>
+            </td>
+          {{end}}
         </tr>
         {{end}}
         {{if .Columns}}
