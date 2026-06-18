@@ -1,0 +1,148 @@
+{{define "base.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Portal</title>
+  <style>
+    :root {
+      --bg:#f5f6fb; --surface:#ffffff; --text:#1f2333; --muted:#6b7280;
+      --border:#e6e8f0; --border-strong:#d6d9e6;
+      --accent:#4636f5; --accent-weak:#eef0ff; --accent-ink:#3a2bd6;
+      --green:#1c9d52; --green-weak:#e6f7ed; --red:#d63031; --red-weak:#fff0f0;
+      --amber:#946200; --amber-weak:#fff6e0;
+      --radius:12px; --radius-sm:8px; --shadow:0 1px 2px rgba(16,24,64,.04), 0 4px 16px rgba(16,24,64,.05);
+    }
+    * { box-sizing:border-box; }
+    body { font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; margin:0; background:var(--bg); color:var(--text); line-height:1.5; }
+    a { color:var(--accent); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    code { background:#f0f1f7; padding:.08rem .35rem; border-radius:5px; font-size:.85em; }
+    h1 { font-size:1.6rem; margin:0 0 .25rem; letter-spacing:-.01em; }
+    h2 { font-size:1.05rem; margin:0 0 .75rem; letter-spacing:-.01em; }
+    .muted { color:var(--muted); }
+    .stack > * + * { margin-top:1rem; }
+
+    /* ---- top nav ---- */
+    .nav { background:var(--surface); border-bottom:1px solid var(--border); position:sticky; top:0; z-index:50; }
+    .nav-inner { max-width:1080px; margin:0 auto; padding:0 1.25rem; height:56px; display:flex; align-items:center; gap:1.25rem; }
+    .brand { display:flex; align-items:center; gap:.45rem; font-weight:800; color:var(--text); letter-spacing:-.02em; }
+    .brand .mark { color:var(--accent); font-size:1.15rem; }
+    .nav-links { display:flex; gap:.25rem; flex:1; }
+    .nav-links a { color:var(--muted); font-weight:600; font-size:.9rem; padding:.4rem .7rem; border-radius:var(--radius-sm); }
+    .nav-links a:hover { color:var(--text); background:var(--bg); text-decoration:none; }
+    .nav-links a.active { color:var(--accent-ink); background:var(--accent-weak); }
+    .nav-right { display:flex; align-items:center; gap:.85rem; }
+    .mesh { display:inline-flex; align-items:center; gap:.4rem; font-size:.8rem; color:var(--muted); font-weight:600; }
+    .user { font-size:.85rem; color:var(--text); font-weight:600; }
+    @media (max-width:720px){ .nav-links{ display:none; } .user{ display:none; } }
+
+    /* ---- layout ---- */
+    .container { max-width:1080px; margin:0 auto; padding:1.75rem 1.25rem 4rem; }
+    .page-head { margin-bottom:1.25rem; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:1.35rem 1.5rem; box-shadow:var(--shadow); margin-bottom:1.25rem; }
+    .card.tight { padding:1rem 1.15rem; }
+    .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1rem; }
+
+    /* ---- buttons ---- */
+    .btn { display:inline-flex; align-items:center; gap:.4rem; background:var(--accent); color:#fff; border:1px solid var(--accent); padding:.5rem 1rem; border-radius:var(--radius-sm); font:inherit; font-weight:600; cursor:pointer; text-decoration:none; line-height:1; }
+    .btn:hover { background:var(--accent-ink); border-color:var(--accent-ink); text-decoration:none; }
+    .btn.ghost { background:#fff; color:var(--accent); }
+    .btn.ghost:hover { background:var(--accent-weak); }
+    .btn.subtle { background:var(--bg); color:var(--text); border-color:var(--border-strong); }
+    .btn.subtle:hover { background:#eceef6; }
+    .btn.danger { background:#fff; color:var(--red); border-color:var(--red); }
+    .btn.danger:hover { background:var(--red-weak); }
+    .btn.go { background:var(--green); border-color:var(--green); }
+    .btn.go:hover { filter:brightness(.94); }
+    .btn.sm { padding:.32rem .65rem; font-size:.82rem; }
+    .btn[disabled]{ opacity:.5; cursor:not-allowed; }
+
+    /* ---- forms ---- */
+    .field { margin-bottom:.9rem; }
+    .field > label, .label { display:block; font-weight:600; font-size:.82rem; color:#444a5e; margin-bottom:.3rem; }
+    input[type=text], input[type=url], input[type=number], select, textarea {
+      width:100%; padding:.55rem .65rem; border:1px solid var(--border-strong); border-radius:var(--radius-sm);
+      font:inherit; background:#fff; color:var(--text);
+    }
+    input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-weak); }
+    .inline-fields { display:flex; gap:1rem; flex-wrap:wrap; align-items:flex-end; }
+    .inline-fields .field { margin-bottom:0; }
+    .check { display:inline-flex; align-items:center; gap:.4rem; font-weight:500; font-size:.9rem; }
+
+    /* ---- banners ---- */
+    .banner { padding:.7rem 1rem; border-radius:var(--radius-sm); font-size:.9rem; margin-bottom:1rem; border:1px solid transparent; }
+    .banner.ok { background:var(--green-weak); color:#15663a; border-color:#bfe6cf; }
+    .banner.err { background:var(--red-weak); color:#a51f20; border-color:#f3c2c2; }
+    .banner.info { background:var(--accent-weak); color:var(--accent-ink); border-color:#d6d8fb; }
+    .banner.warn { background:var(--amber-weak); color:var(--amber); border-color:#f0dca6; }
+
+    /* ---- tables ---- */
+    .table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:var(--radius-sm); }
+    table { width:100%; border-collapse:collapse; font-size:.86rem; }
+    th, td { text-align:left; padding:.5rem .65rem; border-bottom:1px solid var(--border); white-space:nowrap; }
+    thead th { background:#fafbfe; position:sticky; top:0; font-size:.74rem; text-transform:uppercase; letter-spacing:.03em; color:var(--muted); }
+    tbody tr:last-child td { border-bottom:none; }
+    tbody tr:hover { background:#fafbff; }
+
+    /* ---- bits ---- */
+    .pill { display:inline-block; padding:.15rem .6rem; border-radius:999px; font-size:.74rem; font-weight:700; }
+    .pill.accent { background:var(--accent-weak); color:var(--accent-ink); }
+    .pill.green { background:var(--green-weak); color:#15663a; }
+    .pill.red { background:var(--red-weak); color:#a51f20; }
+    .pill.amber { background:var(--amber-weak); color:var(--amber); }
+    .pill.gray { background:#eef0f5; color:#5b6271; }
+    .dot { width:.7rem; height:.7rem; border-radius:50%; display:inline-block; flex:none; }
+    .dot.green { background:var(--green); box-shadow:0 0 0 3px var(--green-weak); }
+    .dot.red { background:var(--red); box-shadow:0 0 0 3px var(--red-weak); }
+    .dot.unknown { background:#b0b4c0; box-shadow:0 0 0 3px #e9eaf0; }
+    .empty { color:var(--muted); padding:1.5rem; text-align:center; border:1px dashed var(--border-strong); border-radius:var(--radius-sm); background:#fafbfe; }
+    .toolbar { display:flex; gap:.75rem; align-items:center; flex-wrap:wrap; }
+    .spacer { flex:1; }
+    .crumb { color:var(--muted); font-size:.85rem; margin-bottom:.75rem; }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="{{if .Username}}/dashboard{{else}}/{{end}}"><span class="mark">⬡</span><span>Portal</span></a>
+      {{if .Username}}
+      <nav class="nav-links">
+        <a href="/dashboard" class="{{if eq .Nav "dashboard"}}active{{end}}">Dashboard</a>
+        {{if .IsAdmin}}
+        <a href="/datasources" class="{{if eq .Nav "datasources"}}active{{end}}">Data sources</a>
+        <a href="/operators" class="{{if eq .Nav "operators"}}active{{end}}">Operators</a>
+        <a href="/pilots" class="{{if eq .Nav "pilots"}}active{{end}}">Pilots</a>
+        {{end}}
+        <a href="/missions" class="{{if eq .Nav "missions"}}active{{end}}">Missions</a>
+      </nav>
+      <div class="nav-right">
+        <span class="mesh" title="peat mesh connection"><span id="mesh-dot" class="dot unknown"></span><span id="mesh-text" class="mesh-text">checking…</span></span>
+        <span class="user">{{.Username}}</span>
+        <form method="POST" action="/auth/logout"><button class="btn ghost sm" type="submit">Sign out</button></form>
+      </div>
+      {{end}}
+    </div>
+  </header>
+  <main class="container">
+    {{ partial .Content . }}
+  </main>
+  {{if .Username}}
+  <script>
+    (function(){
+      var dot = document.getElementById('mesh-dot'), txt = document.getElementById('mesh-text');
+      if (!dot) return;
+      async function poll(){
+        try {
+          var r = await fetch('/api/peat/status', { headers:{Accept:'application/json'}, cache:'no-store' });
+          var d = await r.json();
+          if (d.connected) { dot.className='dot green'; txt.textContent = d.sync_active ? 'mesh · syncing' : 'mesh · connected'; }
+          else { dot.className='dot red'; txt.textContent='mesh · offline'; }
+        } catch(e){ dot.className='dot red'; txt.textContent='mesh · offline'; }
+      }
+      poll(); setInterval(poll, 5000);
+    })();
+  </script>
+  {{end}}
+</body>
+</html>{{end}}

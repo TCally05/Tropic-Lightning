@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"embed"
@@ -54,15 +55,26 @@ type Server struct {
 // NewServer parses templates and returns a Server ready to register routes.
 // weather and httpsrc may be nil (no live connectors configured).
 func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Service, pl *pilots.Service, dsets *dataset.Service, ops *operators.Service, wx *weather.Service, httpsrc *httpsource.Service) (*Server, error) {
+	// tmpl is captured by the partial func below; assigned after parsing so the
+	// shared layout can render a page's content block by name.
+	var tmpl *template.Template
 	funcs := template.FuncMap{
 		"hasPrefix":  strings.HasPrefix,
 		"trimPrefix": strings.TrimPrefix,
+		"partial": func(name string, data any) (template.HTML, error) {
+			var buf bytes.Buffer
+			if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+				return "", err
+			}
+			return template.HTML(buf.String()), nil
+		},
 	}
-	tmpl, err := template.New("").Funcs(funcs).ParseFS(templateFS, "templates/*.html")
+	t, err := template.New("").Funcs(funcs).ParseFS(templateFS, "templates/*.html")
 	if err != nil {
 		return nil, err
 	}
-	return &Server{auth: authn, cfg: cfg, templates: tmpl, dataSources: ds, pilots: pl, datasets: dsets, operators: ops, weather: wx, httpsource: httpsrc}, nil
+	tmpl = t
+	return &Server{auth: authn, cfg: cfg, templates: t, dataSources: ds, pilots: pl, datasets: dsets, operators: ops, weather: wx, httpsource: httpsrc}, nil
 }
 
 // Routes wires up the HTTP routes and middleware, returning the root handler.
@@ -154,7 +166,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 			authenticated = true
 		}
 	}
-	s.render(w, "home.html", map[string]any{"Authenticated": authenticated})
+	s.render(w, r, "home.html", "Sign in", "home", map[string]any{"Authenticated": authenticated})
 }
 
 // handleLogin starts the authorization code flow: generate CSRF state + nonce,
@@ -303,7 +315,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Datasets assigned to the previewed user (the operator view's "Your datasets").
 	myDatasets, _ := s.operators.DatasetsForOperator(r.Context(), previewAs)
 
-	s.render(w, "dashboard.html", map[string]any{
+	s.render(w, r, "dashboard.html", "Dashboard", "dashboard", map[string]any{
 		"Username":      firstNonEmpty(claims.PreferredUsername, claims.Name, claims.Subject),
 		"Email":         claims.Email,
 		"RealmRoles":    claims.AllRealmRoles(),
@@ -375,7 +387,7 @@ func (s *Server) handleDataSourcesPage(w http.ResponseWriter, r *http.Request) {
 	if s.httpsource != nil {
 		httpConnectors, _ = s.httpsource.ListConnectors(r.Context())
 	}
-	s.render(w, "datasources.html", map[string]any{
+	s.render(w, r, "datasources.html", "Data sources", "datasources", map[string]any{
 		"Sources":           sources,
 		"KnownTypes":        datasource.KnownTypes,
 		"Error":             r.URL.Query().Get("error"),
@@ -471,9 +483,10 @@ func (s *Server) handleDataSourceDelete(w http.ResponseWriter, r *http.Request) 
 
 const maxUploadBytes = 12 << 20 // 12 MiB
 
-// handleUploadPage renders the drag-and-drop upload + preview page.
+// handleUploadPage redirects to the data sources page, where file upload is one
+// of the inline "add a source" options.
 func (s *Server) handleUploadPage(w http.ResponseWriter, r *http.Request) {
-	s.render(w, "dataset_upload.html", nil)
+	http.Redirect(w, r, "/datasources#file", http.StatusFound)
 }
 
 // handleUploadParse accepts a multipart file, parses it, holds it for preview,
@@ -729,7 +742,7 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		segments, gradient = computeWheel(filtered, view.GroupBy)
 	}
 
-	s.render(w, "dataset_view.html", map[string]any{
+	s.render(w, r, "dataset_view.html", name, "datasources", map[string]any{
 		"Collection":    collection,
 		"Name":          name,
 		"Columns":       cols,
@@ -1030,7 +1043,7 @@ func (s *Server) handleOperatorsPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to list datasets: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.render(w, "operators.html", map[string]any{
+	s.render(w, r, "operators.html", "Operators", "operators", map[string]any{
 		"Operators": ops,
 		"Datasets":  sets,
 		"Error":     r.URL.Query().Get("error"),
@@ -1088,7 +1101,7 @@ func (s *Server) handlePilotsPage(w http.ResponseWriter, r *http.Request) {
 		shown = shown[:pilotsDisplayLimit]
 	}
 	_, connected := s.peatStatus(r.Context())
-	s.render(w, "pilots.html", map[string]any{
+	s.render(w, r, "pilots.html", "USAF pilots", "pilots", map[string]any{
 		"Pilots":        shown,
 		"Total":         len(all),
 		"Shown":         len(shown),
@@ -1147,7 +1160,7 @@ func (s *Server) handleMissions(w http.ResponseWriter, r *http.Request) {
 	if len(shown) > pilotsDisplayLimit {
 		shown = shown[:pilotsDisplayLimit]
 	}
-	s.render(w, "missions.html", map[string]any{
+	s.render(w, r, "missions.html", "Mission readiness", "missions", map[string]any{
 		"Summary":      res.Summary,
 		"AvailPct":     res.Summary.AvailablePct(),
 		"GrandTotal":   res.GrandTotal,
@@ -1242,9 +1255,28 @@ func (s *Server) handleMissionsSummary(w http.ResponseWriter, r *http.Request) {
 
 // --- helpers ---
 
-func (s *Server) render(w http.ResponseWriter, name string, data any) {
+// render wraps a page's content template in the shared layout. name is the
+// page's content block; title and nav set the document title and active nav
+// item. The page's data map is augmented with shell fields (Username, IsAdmin)
+// pulled from the request so every page gets a consistent header.
+func (s *Server) render(w http.ResponseWriter, r *http.Request, name, title, nav string, data map[string]any) {
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["Content"] = name
+	data["Title"] = title
+	data["Nav"] = nav
+	if _, ok := data["Username"]; !ok {
+		if claims, ok := auth.ClaimsFromContext(r.Context()); ok && claims != nil {
+			data["Username"] = firstNonEmpty(claims.PreferredUsername, claims.Name, claims.Subject)
+		}
+	}
+	if _, ok := data["IsAdmin"]; !ok {
+		claims, _ := auth.ClaimsFromContext(r.Context())
+		data["IsAdmin"] = s.auth.IsAdmin(claims)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := s.templates.ExecuteTemplate(w, name, data); err != nil {
+	if err := s.templates.ExecuteTemplate(w, "base.html", data); err != nil {
 		http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
 	}
 }
