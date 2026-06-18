@@ -14,8 +14,9 @@ var ErrNotFound = errors.New("not found")
 
 // Dataset kinds.
 const (
-	KindPilots  = "pilots"
-	KindGeneric = "generic"
+	KindPilots   = "pilots"
+	KindGeneric  = "generic"
+	KindCombined = "combined" // a virtual join of two datasets (computed live)
 )
 
 // Operator is an app-side operator record keyed by Keycloak username.

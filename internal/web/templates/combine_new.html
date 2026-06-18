@@ -1,0 +1,67 @@
+{{define "combine_new.html"}}
+<div class="crumb"><a href="/catalog">← Data sources</a></div>
+<div class="page-head">
+  <h1>Combine data sources</h1>
+  <p class="muted">Join two data sources on a shared key column. Every row of the first source is matched to the second by key (the second is used as a lookup — one row per key), producing a combined source you can filter and chart. Computed live, so it stays fresh.</p>
+</div>
+
+{{if .Error}}<div class="banner err">{{.Error}}</div>{{end}}
+
+{{if .Sources}}
+<div class="card">
+  <form method="POST" action="/combine">
+    <div class="field"><label>Name</label><input type="text" name="name" placeholder="e.g. Pilots with base weather" required></div>
+
+    <div class="grid2">
+      <div>
+        <h2 style="font-size:.95rem;">First source (rows)</h2>
+        <div class="field"><label>Data source</label>
+          <select name="left" id="left" onchange="syncKeys()" required>
+            <option value="">— choose —</option>
+            {{range .Sources}}<option value="{{.Collection}}">{{.Name}}</option>{{end}}
+          </select>
+        </div>
+        <div class="field"><label>Key column</label>
+          <select name="left_key" id="left_key" required><option value="">— choose a source first —</option></select>
+        </div>
+      </div>
+      <div>
+        <h2 style="font-size:.95rem;">Second source (lookup)</h2>
+        <div class="field"><label>Data source</label>
+          <select name="right" id="right" onchange="syncKeys()" required>
+            <option value="">— choose —</option>
+            {{range .Sources}}<option value="{{.Collection}}">{{.Name}}</option>{{end}}
+          </select>
+        </div>
+        <div class="field"><label>Key column</label>
+          <select name="right_key" id="right_key" required><option value="">— choose a source first —</option></select>
+        </div>
+      </div>
+    </div>
+
+    <p class="muted" style="font-size:.82rem;">Columns from the second source are added to each matched row (its key column is dropped; name clashes are prefixed with the source name). Unmatched first-source rows keep blank second-source columns.</p>
+    <button class="btn" type="submit">Create combined source</button>
+  </form>
+</div>
+{{else}}
+<div class="card"><div class="empty">You need at least two file/weather/HTTP data sources to combine. Add some under <a href="/datasources">Manage</a> first.</div></div>
+{{end}}
+
+<script>
+  var COLS = {{.ColumnsJSON}};
+  function fill(selectId, cols, keep){
+    var sel = document.getElementById(selectId);
+    var cur = keep ? sel.value : '';
+    sel.innerHTML = '<option value="">— choose a column —</option>';
+    (cols||[]).forEach(function(c){
+      var o = document.createElement('option'); o.value = c; o.textContent = c;
+      if (c === cur) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+  function syncKeys(){
+    fill('left_key', COLS[document.getElementById('left').value], true);
+    fill('right_key', COLS[document.getElementById('right').value], true);
+  }
+</script>
+{{end}}
