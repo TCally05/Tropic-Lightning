@@ -906,3 +906,45 @@ func TestOperatorUpdatesExistingRow(t *testing.T) {
 		t.Errorf("row not updated: %+v", got[0].Fields)
 	}
 }
+
+func TestOperatorBulkSave(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	_ = dstore.PutMeta(ctx, "ds_roster", "Roster", []string{"name", "status"})
+	_ = dstore.PutRow(ctx, "ds_roster", "r000001", map[string]string{"name": "Alice", "status": ""})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
+	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops)
+	h := srv.Routes()
+
+	body := `{"rows":[{"id":"r000001","fields":{"name":"Alice","status":"grounded"}},{"id":"","fields":{"name":"Bob","status":"ok"}}],"deletes":[]}`
+	tok := kc.SignToken(t, map[string]any{"preferred_username": "s4", "realm_access": map[string]any{"roles": []string{"user"}}})
+	req := httptest.NewRequest(http.MethodPost, "/datasets/ds_roster/bulk", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bulk = %d (%s)", rec.Code, rec.Body.String())
+	}
+	got, _ := dstore.ListRows(ctx, "ds_roster")
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2", len(got))
+	}
+
+	// Unassigned user -> 403.
+	tok2 := kc.SignToken(t, map[string]any{"preferred_username": "nobody", "realm_access": map[string]any{"roles": []string{"user"}}})
+	req2 := httptest.NewRequest(http.MethodPost, "/datasets/ds_roster/bulk", strings.NewReader(`{"rows":[]}`))
+	req2.Header.Set("Authorization", "Bearer "+tok2)
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusForbidden {
+		t.Errorf("unassigned bulk = %d, want 403", rec2.Code)
+	}
+}

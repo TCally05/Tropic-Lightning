@@ -216,3 +216,48 @@ func TestUpdateRowPopulatesNewColumn(t *testing.T) {
 		t.Error("empty id should error")
 	}
 }
+
+func TestBulkSave(t *testing.T) {
+	store := NewMemoryStore()
+	svc := NewService(store, nil, nil)
+	ctx := context.Background()
+	token, _, _ := svc.Stage("d.csv", []byte("name,base\nAlice,Hill\nBob,Nellis\nCarol,Luke\n"))
+	res, _ := svc.Import(ctx, token, "D", []string{"name", "base"})
+	c := res.Collection
+	_, _, rows, _ := svc.View(ctx, c)
+	// rows sorted by id: r000001 Alice, r000002 Bob, r000003 Carol
+
+	br, err := svc.BulkSave(ctx, c,
+		[]RowEdit{
+			{ID: rows[0].ID, Fields: map[string]string{"name": "Alice", "base": "Edwards"}}, // update
+			{ID: "", Fields: map[string]string{"name": "Dave", "base": "Travis"}},           // add
+			{ID: "", Fields: map[string]string{"name": "", "base": ""}},                     // blank -> skipped
+		},
+		[]string{rows[2].ID}, // delete Carol
+	)
+	if err != nil {
+		t.Fatalf("bulk: %v", err)
+	}
+	if br.Updated != 1 || br.Added != 1 || br.Deleted != 1 {
+		t.Fatalf("result = %+v", br)
+	}
+	_, _, rows, _ = svc.View(ctx, c)
+	if len(rows) != 3 { // 3 - 1 deleted + 1 added
+		t.Fatalf("rows = %d, want 3", len(rows))
+	}
+	var alice, dave bool
+	for _, r := range rows {
+		if r.Fields["name"] == "Alice" && r.Fields["base"] == "Edwards" {
+			alice = true
+		}
+		if r.Fields["name"] == "Dave" {
+			dave = true
+		}
+		if r.Fields["name"] == "Carol" {
+			t.Error("Carol should have been deleted")
+		}
+	}
+	if !alice || !dave {
+		t.Errorf("expected updated Alice and added Dave; rows=%v", rows)
+	}
+}

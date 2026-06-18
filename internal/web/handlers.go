@@ -120,6 +120,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /datasets/{collection}/rows/add", authed(s.handleDatasetAddRow))
 	mux.Handle("POST /datasets/{collection}/rows/update", authed(s.handleDatasetUpdateRow))
 	mux.Handle("POST /datasets/{collection}/rows/delete", authed(s.handleDatasetDeleteRow))
+	mux.Handle("POST /datasets/{collection}/bulk", authed(s.handleDatasetBulkSave))
 	mux.Handle("GET /missions", authed(s.handleMissions))
 	mux.Handle("POST /pilots/{id}/status", authed(s.handlePilotStatus))
 	mux.Handle("GET /api/missions/summary", authed(s.handleMissionsSummary))
@@ -632,6 +633,30 @@ func (s *Server) handleDatasetDeleteRow(w http.ResponseWriter, r *http.Request) 
 	s.datasetEdit(w, r, func(ctx context.Context, c string) error {
 		return s.datasets.DeleteRow(ctx, c, r.PostFormValue("id"))
 	})
+}
+
+// handleDatasetBulkSave applies many row edits (update/add/delete) from a JSON
+// body in one request, so the editor can "Save all" once.
+func (s *Server) handleDatasetBulkSave(w http.ResponseWriter, r *http.Request) {
+	collection := r.PathValue("collection")
+	if !s.canAccessDataset(r, collection) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not assigned to this dataset"})
+		return
+	}
+	var req struct {
+		Rows    []dataset.RowEdit `json:"rows"`
+		Deletes []string          `json:"deletes"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxUploadBytes)).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	res, err := s.datasets.BulkSave(r.Context(), collection, req.Rows, req.Deletes)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // rowMatches applies the generic dataset filter to a row.
