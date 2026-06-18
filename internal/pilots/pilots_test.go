@@ -111,3 +111,50 @@ func TestSummaryAvailablePct(t *testing.T) {
 		t.Error("empty summary pct should be 0")
 	}
 }
+
+func TestBrowseFiltersAndFacets(t *testing.T) {
+	store := NewMemoryStore()
+	ctx := context.Background()
+	seed := []Pilot{
+		{PilotID: "P1", Base: "Hill AFB", Aircraft: "F-16", Rank: "O-2", MissionStatus: StatusAvailable},
+		{PilotID: "P2", Base: "Hill AFB", Aircraft: "C-17", Rank: "O-3", MissionStatus: StatusGrounded},
+		{PilotID: "P3", Base: "Nellis AFB", Aircraft: "F-16", Rank: "O-2", MissionStatus: StatusAvailable},
+	}
+	for _, p := range seed {
+		_ = store.Put(ctx, p)
+	}
+	svc := NewService(store, nil, nil)
+
+	// No filter: all 3, facets list distinct values.
+	all, err := svc.Browse(ctx, Filter{})
+	if err != nil {
+		t.Fatalf("browse: %v", err)
+	}
+	if all.GrandTotal != 3 || all.Summary.Total != 3 {
+		t.Fatalf("unfiltered = %+v", all.Summary)
+	}
+	if len(all.Facets.Bases) != 2 || len(all.Facets.Aircraft) != 2 {
+		t.Errorf("facets = %+v", all.Facets)
+	}
+
+	// Filter by base: only Hill AFB (2), summary reflects subset.
+	hill, _ := svc.Browse(ctx, Filter{Base: "Hill AFB"})
+	if hill.Summary.Total != 2 || hill.GrandTotal != 3 {
+		t.Errorf("hill summary = %+v (grand %d)", hill.Summary, hill.GrandTotal)
+	}
+	if hill.Summary.Available != 1 || hill.Summary.Grounded != 1 {
+		t.Errorf("hill availability = %+v", hill.Summary)
+	}
+
+	// Combined filter: Hill AFB + F-16 -> P1 only.
+	combo, _ := svc.Browse(ctx, Filter{Base: "Hill AFB", Aircraft: "F-16"})
+	if combo.Summary.Total != 1 || combo.Pilots[0].PilotID != "P1" {
+		t.Errorf("combo = %+v", combo.Pilots)
+	}
+
+	// Free-text search.
+	q, _ := svc.Browse(ctx, Filter{Query: "nellis"})
+	if q.Summary.Total != 1 || q.Pilots[0].PilotID != "P3" {
+		t.Errorf("query = %+v", q.Pilots)
+	}
+}

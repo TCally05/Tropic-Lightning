@@ -67,7 +67,8 @@
       "Bash(mkdir -p internal/pilots/data)",
       "Bash(unzip -l internal/pilots/data/usaf_pilots_synthetic.xlsx)",
       "Bash(unzip -p internal/pilots/data/usaf_pilots_synthetic.xlsx xl/workbook.xml)",
-      "Bash(gofmt -w internal/pilots/)"
+      "Bash(gofmt -w internal/pilots/)",
+      "Bash(gofmt -w internal/web/ internal/pilots/)"
     ]
   }
 }

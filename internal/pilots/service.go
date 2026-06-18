@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/defenseunicorns/keycloak-portal/internal/datasource"
@@ -108,6 +110,102 @@ func (s *Service) SetStatus(ctx context.Context, id, status, note, by string) (P
 		return Pilot{}, err
 	}
 	return p, nil
+}
+
+// Filter narrows the pilot list. Empty fields are ignored.
+type Filter struct {
+	Base     string
+	Aircraft string
+	Rank     string
+	Status   string // available | grounded | ""
+	Query    string // free-text over pilot id / base / aircraft / rank
+}
+
+// Active reports whether any filter is set.
+func (f Filter) Active() bool {
+	return f.Base != "" || f.Aircraft != "" || f.Rank != "" || f.Status != "" || f.Query != ""
+}
+
+func (f Filter) match(p Pilot) bool {
+	if f.Base != "" && p.Base != f.Base {
+		return false
+	}
+	if f.Aircraft != "" && p.Aircraft != f.Aircraft {
+		return false
+	}
+	if f.Rank != "" && p.Rank != f.Rank {
+		return false
+	}
+	if f.Status != "" && p.MissionStatus != f.Status {
+		return false
+	}
+	if f.Query != "" {
+		hay := strings.ToLower(p.PilotID + " " + p.Base + " " + p.Aircraft + " " + p.Rank)
+		if !strings.Contains(hay, strings.ToLower(f.Query)) {
+			return false
+		}
+	}
+	return true
+}
+
+// Facets are the distinct values available for the filter dropdowns.
+type Facets struct {
+	Bases    []string
+	Aircraft []string
+	Ranks    []string
+}
+
+// BrowseResult bundles a filtered query: the matching pilots, a readiness
+// summary over that subset (drives the wheel), the facet options, and the
+// unfiltered total for context.
+type BrowseResult struct {
+	Pilots     []Pilot
+	Summary    Summary
+	Facets     Facets
+	GrandTotal int
+}
+
+// Browse lists pilots once, applies the filter, and computes the summary +
+// facets in a single pass.
+func (s *Service) Browse(ctx context.Context, f Filter) (BrowseResult, error) {
+	all, err := s.store.List(ctx)
+	if err != nil {
+		return BrowseResult{}, err
+	}
+	bases, aircraft, ranks := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	res := BrowseResult{GrandTotal: len(all)}
+	for _, p := range all {
+		if p.Base != "" {
+			bases[p.Base] = true
+		}
+		if p.Aircraft != "" {
+			aircraft[p.Aircraft] = true
+		}
+		if p.Rank != "" {
+			ranks[p.Rank] = true
+		}
+		if !f.match(p) {
+			continue
+		}
+		res.Pilots = append(res.Pilots, p)
+		res.Summary.Total++
+		if p.Available() {
+			res.Summary.Available++
+		} else {
+			res.Summary.Grounded++
+		}
+	}
+	res.Facets = Facets{Bases: sortedKeys(bases), Aircraft: sortedKeys(aircraft), Ranks: sortedKeys(ranks)}
+	return res, nil
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ReadinessSummary rolls up availability for the status wheel.
