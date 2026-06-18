@@ -25,20 +25,16 @@
 {{if and .IsAdmin (eq .View "admin")}}
 <div class="grid2">
   <a class="card" href="/datasources" style="color:inherit;">
-    <h2>Data sources →</h2>
+    <h2>Manage sources →</h2>
     <p class="muted" style="margin:0;">Add files, live weather, and HTTP/JSON APIs; manage connections.</p>
   </a>
   <a class="card" href="/operators" style="color:inherit;">
-    <h2>Operators &amp; assignments →</h2>
-    <p class="muted" style="margin:0;">Register operators and assign which datasets they can see.</p>
+    <h2>Operators →</h2>
+    <p class="muted" style="margin:0;">Register operator identities for the <em>Viewing as</em> preview.</p>
   </a>
-  <a class="card" href="/pilots" style="color:inherit;">
-    <h2>USAF pilots dataset →</h2>
-    <p class="muted" style="margin:0;">Import and inspect the pilots dataset.</p>
-  </a>
-  <a class="card" href="/missions" style="color:inherit;">
-    <h2>Mission readiness →</h2>
-    <p class="muted" style="margin:0;">The operator readiness view and status wheel.</p>
+  <a class="card" href="/catalog" style="color:inherit;">
+    <h2>Data sources →</h2>
+    <p class="muted" style="margin:0;">Browse, subscribe to, and combine the available sources.</p>
   </a>
 </div>
 {{end}}
@@ -53,11 +49,7 @@
   {{if .MyDatasets}}
     <div class="grid2" style="margin-top:1rem;">
       {{range .MyDatasets}}
-        {{if eq .Kind "pilots"}}
-          <a class="card tight" href="/missions" style="color:inherit; margin:0;"><strong>{{.Name}}</strong><br><span class="muted">Mission readiness →</span></a>
-        {{else}}
-          <a class="card tight" href="/datasets/{{.Collection}}" style="color:inherit; margin:0;"><strong>{{.Name}}</strong><br><span class="muted">Open data source →</span></a>
-        {{end}}
+        <a class="card tight" href="/datasets/{{.Collection}}" style="color:inherit; margin:0;"><strong>{{.Name}}</strong><br><span class="muted">Open data source →</span></a>
       {{end}}
     </div>
   {{else}}

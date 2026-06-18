@@ -20,7 +20,6 @@ import (
 	"github.com/defenseunicorns/keycloak-portal/internal/datasource"
 	"github.com/defenseunicorns/keycloak-portal/internal/httpsource"
 	"github.com/defenseunicorns/keycloak-portal/internal/operators"
-	"github.com/defenseunicorns/keycloak-portal/internal/pilots"
 	"github.com/defenseunicorns/keycloak-portal/internal/views"
 	"github.com/defenseunicorns/keycloak-portal/internal/weather"
 	"github.com/defenseunicorns/keycloak-portal/internal/web"
@@ -74,14 +73,6 @@ func run() error {
 
 	dsService := datasource.NewService(store)
 
-	// Pilots dataset, ingested into a separate peat collection on the same node.
-	pilotStore, err := pilots.NewPeatStore(cfg.PeatNodeAddr, creds)
-	if err != nil {
-		return err
-	}
-	defer pilotStore.Close()
-	pilotService := pilots.NewService(pilotStore, dsService, slog.Default())
-
 	// Uploaded files become generic datasets in their own peat collections.
 	datasetStore, err := dataset.NewPeatStore(cfg.PeatNodeAddr, creds)
 	if err != nil {
@@ -97,12 +88,6 @@ func run() error {
 	}
 	defer operatorStore.Close()
 	operatorService := operators.NewService(operatorStore)
-	// Make the pilots dataset assignable even before it's (re)imported (best-effort).
-	regCtx, regCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := operatorService.RegisterDataset(regCtx, "pilots", "USAF Pilots", operators.KindPilots, "pilots"); err != nil {
-		slog.Warn("registering pilots dataset", "err", err)
-	}
-	regCancel()
 
 	// Live weather connector (Open-Meteo). Connector configs live in peat; the
 	// poller writes current conditions into each connector's generic dataset
@@ -140,7 +125,7 @@ func run() error {
 	defer combineStore.Close()
 	combineService := combine.NewService(combineStore, datasetService)
 
-	srv, err := web.NewServer(authn, cfg, dsService, pilotService, datasetService, operatorService, weatherService, httpService, viewService, combineService)
+	srv, err := web.NewServer(authn, cfg, dsService, datasetService, operatorService, weatherService, httpService, viewService, combineService)
 	if err != nil {
 		return err
 	}
