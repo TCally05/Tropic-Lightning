@@ -22,13 +22,21 @@ type Member struct {
 
 // Combined is a left join: every row of Left, augmented with the matching Right
 // row's columns (Right is used as a lookup — one row per key value; unmatched
-// left rows keep blank right columns).
+// left rows keep blank right columns). Key matching is forgiving (case- and
+// whitespace-insensitive). OnlyMatched drops rows with no match.
 type Combined struct {
-	Key   string `json:"key"`   // == its virtual collection id ("cmb_<slug>")
-	Name  string `json:"name"`  // display name
-	Owner string `json:"owner"` // creator (Keycloak username)
-	Left  Member `json:"left"`
-	Right Member `json:"right"`
+	Key         string `json:"key"`   // == its virtual collection id ("cmb_<slug>")
+	Name        string `json:"name"`  // display name
+	Owner       string `json:"owner"` // creator (Keycloak username)
+	Left        Member `json:"left"`
+	Right       Member `json:"right"`
+	OnlyMatched bool   `json:"only_matched"`
+}
+
+// normKey makes join matching forgiving: lowercased, trimmed, internal
+// whitespace collapsed (so "Hill AFB", "hill afb", and " Hill  AFB " all match).
+func normKey(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 // slug normalises a name into a safe key suffix.

@@ -1499,3 +1499,57 @@ func TestCombineDeleteRemovesFromCatalog(t *testing.T) {
 		t.Error("combined spec should be deleted")
 	}
 }
+
+func TestCombinePreviewAndForgivingMatch(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	// Keys differ only by case/spacing — forgiving matching should still link them.
+	_ = dstore.PutMeta(ctx, "ds_roster", "Roster", []string{"name", "base"})
+	_ = dstore.PutRow(ctx, "ds_roster", "r1", map[string]string{"name": "A", "base": "Hill AFB"})
+	_ = dstore.PutRow(ctx, "ds_roster", "r2", map[string]string{"name": "B", "base": "Edwards"})
+	_ = dstore.PutMeta(ctx, "ds_wx", "Weather", []string{"base", "temp"})
+	_ = dstore.PutRow(ctx, "ds_wx", "w1", map[string]string{"base": "hill afb", "temp": "31"})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
+	_ = ops.RegisterDataset(ctx, "ds_wx", "Weather", operators.KindGeneric, "ds_wx")
+	cmb := combine.NewService(combine.NewMemoryStore(), dsvc)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, cmb)
+	h := srv.Routes()
+	tok := adminToken(t, kc)
+
+	// Preview: 1 of 2 rows match despite case/space differences.
+	form := url.Values{"left": {"ds_roster"}, "left_key": {"base"}, "right": {"ds_wx"}, "right_key": {"base"}}
+	pr := httptest.NewRequest(http.MethodPost, "/combine/preview", strings.NewReader(form.Encode()))
+	pr.Header.Set("Authorization", "Bearer "+tok)
+	pr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	prr := httptest.NewRecorder()
+	h.ServeHTTP(prr, pr)
+	var pv struct {
+		Matched, Unmatched, Total int
+		Info                      string
+	}
+	_ = json.Unmarshal(prr.Body.Bytes(), &pv)
+	if pv.Matched != 1 || pv.Total != 2 {
+		t.Fatalf("preview matched=%d total=%d, want 1/2 (forgiving match)", pv.Matched, pv.Total)
+	}
+
+	// Create + open: the combined view shows the match banner with temp populated.
+	cform := url.Values{"name": {"RW"}, "left": {"ds_roster"}, "left_key": {"base"}, "right": {"ds_wx"}, "right_key": {"base"}}
+	cr := httptest.NewRequest(http.MethodPost, "/combine", strings.NewReader(cform.Encode()))
+	cr.Header.Set("Authorization", "Bearer "+tok)
+	cr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	crr := httptest.NewRecorder()
+	h.ServeHTTP(crr, cr)
+	vr := httptest.NewRequest(http.MethodGet, "/datasets/cmb_rw", nil)
+	vr.Header.Set("Authorization", "Bearer "+tok)
+	vrr := httptest.NewRecorder()
+	h.ServeHTTP(vrr, vr)
+	body := vrr.Body.String()
+	if !strings.Contains(body, "1 of 2 rows matched") || !strings.Contains(body, ">31<") {
+		t.Errorf("combined view should show match info + the joined temp value")
+	}
+}
