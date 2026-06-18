@@ -1339,12 +1339,13 @@ func (s *Server) forbidden(w http.ResponseWriter, r *http.Request) {
 
 // --- operators & assignments (admin only) ---
 
-// reconcileDatasets ensures the registry contains every dataset known to the
-// node — catalog (dataset://) entries, combined sources, AND any dataset
-// collection present in the peat node (e.g. synced in from a peer that this app
-// has no local record of) — so they all show up in the catalog. Idempotent;
-// preserves subscriptions. Returns the number of *newly discovered* datasets
-// (ones that weren't already registered).
+// reconcileDatasets registers every dataset known to the node into the catalog:
+// data sources from the synced `data_sources` collection (read via the peat
+// document API — so sources created on a peer and synced in are picked up) and
+// combined sources. For dataset-backed sources it confirms the dataset's data
+// actually arrived (GetDocument __meta__) before surfacing it, so users don't
+// subscribe to a reference whose rows haven't synced yet. Idempotent; preserves
+// subscriptions. Returns the count of *newly* registered datasets.
 func (s *Server) reconcileDatasets(ctx context.Context) int {
 	// Drop the legacy "pilots" demo dataset if it lingers from older versions.
 	_ = s.operators.DeleteDataset(ctx, "pilots")
@@ -1355,49 +1356,45 @@ func (s *Server) reconcileDatasets(ctx context.Context) int {
 			known[d.Key] = true
 		}
 	}
+	added := 0
+	register := func(key, name, kind, coll string) {
+		fresh := !known[key]
+		if err := s.operators.RegisterDataset(ctx, key, name, kind, coll); err != nil {
+			slog.Warn("reconcile register", "key", key, "err", err)
+			return
+		}
+		if fresh {
+			known[key] = true
+			added++
+		}
+	}
 
+	// Data sources live as documents in the synced `data_sources` collection;
+	// surface each dataset-backed one whose dataset has actually landed locally.
 	if sources, err := s.dataSources.List(ctx); err == nil {
 		for _, d := range sources {
-			if c, ok := strings.CutPrefix(d.Endpoint, "dataset://"); ok && c != "" {
-				if err := s.operators.RegisterDataset(ctx, c, d.Name, operators.KindGeneric, c); err != nil {
-					slog.Warn("reconcile dataset", "collection", c, "err", err)
-				}
+			c, ok := strings.CutPrefix(d.Endpoint, "dataset://")
+			if !ok || c == "" {
+				continue
 			}
+			if !s.datasets.Exists(ctx, c) {
+				continue // referenced, but its data hasn't synced in yet
+			}
+			register(c, d.Name, operators.KindGeneric, c)
 		}
 	} else {
 		slog.Warn("reconcile: list data sources", "err", err)
 	}
 
-	// Combined sources are virtual datasets; register them so they're listed.
+	// Combined sources are virtual datasets (their spec syncs via combined_sources).
 	if s.combine != nil {
 		if combos, err := s.combine.List(ctx); err == nil {
 			for _, c := range combos {
-				if err := s.operators.RegisterDataset(ctx, c.Key, c.Name, operators.KindCombined, c.Key); err != nil {
-					slog.Warn("reconcile combined source", "key", c.Key, "err", err)
-				}
+				register(c.Key, c.Name, operators.KindCombined, c.Key)
 			}
 		} else {
 			slog.Warn("reconcile: list combined sources", "err", err)
 		}
-	}
-
-	// Discover dataset collections sitting in the peat node (incl. mesh-synced
-	// ones) that aren't registered yet, and add them so users can subscribe.
-	added := 0
-	if refs, err := s.datasets.Discover(ctx); err == nil {
-		for _, ref := range refs {
-			if known[ref.Collection] {
-				continue
-			}
-			if err := s.operators.RegisterDataset(ctx, ref.Collection, ref.Name, operators.KindGeneric, ref.Collection); err != nil {
-				slog.Warn("reconcile discovered dataset", "collection", ref.Collection, "err", err)
-				continue
-			}
-			known[ref.Collection] = true
-			added++
-		}
-	} else {
-		slog.Warn("reconcile: discover datasets", "err", err)
 	}
 	return added
 }

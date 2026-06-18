@@ -621,11 +621,13 @@ func TestCatalogReconcilesUploadedDatasets(t *testing.T) {
 	defer kc.Close()
 	ctx := context.Background()
 	ds := datasource.NewService(datasource.NewMemoryStore())
-	// A dataset present only as a catalog entry (dataset:// endpoint).
+	dstore := dataset.NewMemoryStore()
+	// A data source with its dataset present in the node (catalog doc + rows).
 	_, _ = ds.Create(ctx, datasource.Input{Name: "Roster", Type: "file", Endpoint: "dataset://ds_roster", Enabled: true})
+	_ = dstore.PutMeta(ctx, "ds_roster", "Roster", []string{"name"})
 	ops := operators.NewService(operators.NewMemoryStore())
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		dataset.NewService(dataset.NewMemoryStore(), ds, nil), ops, nil, nil, nil, nil, nil)
+		dataset.NewService(dstore, ds, nil), ops, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1622,10 +1624,17 @@ func TestDiscoverSyncedDatasetIntoCatalog(t *testing.T) {
 	ctx := context.Background()
 	ds := datasource.NewService(datasource.NewMemoryStore())
 	dstore := dataset.NewMemoryStore()
-	// A dataset sitting in the peat node (as if synced from a peer) with NO
-	// catalog/registry entry — the app has "no knowledge" of it.
+
+	// A data source synced in from a peer: its catalog doc lives in `data_sources`
+	// and its dataset rows arrived too. The app has no registry entry yet.
+	_, _ = ds.Create(ctx, datasource.Input{Name: "Synced Roster", Type: "file", Endpoint: "dataset://ds_synced", Enabled: true})
 	_ = dstore.PutMeta(ctx, "ds_synced", "Synced Roster", []string{"name"})
 	_ = dstore.PutRow(ctx, "ds_synced", "r1", map[string]string{"name": "A"})
+
+	// A second data source whose dataset rows have NOT synced yet (no __meta__):
+	// it must NOT be surfaced — that's the GetDocument existence guard.
+	_, _ = ds.Create(ctx, datasource.Input{Name: "Pending", Type: "file", Endpoint: "dataset://ds_pending", Enabled: true})
+
 	dsvc := dataset.NewService(dstore, ds, nil)
 	ops := operators.NewService(operators.NewMemoryStore()) // registry empty
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, nil, nil)
@@ -1635,7 +1644,7 @@ func TestDiscoverSyncedDatasetIntoCatalog(t *testing.T) {
 	h := srv.Routes()
 	tok := adminToken(t, kc)
 
-	// Manual "Sync from mesh" discovers it (count = 1) ...
+	// "Sync from mesh" discovers the landed dataset (count = 1), not the pending one.
 	sr := httptest.NewRequest(http.MethodPost, "/catalog/sync", nil)
 	sr.Header.Set("Authorization", "Bearer "+tok)
 	srr := httptest.NewRecorder()
@@ -1643,16 +1652,19 @@ func TestDiscoverSyncedDatasetIntoCatalog(t *testing.T) {
 	if loc := srr.Header().Get("Location"); loc != "/catalog?synced=1" {
 		t.Fatalf("sync redirect = %q, want /catalog?synced=1", loc)
 	}
-	// ... and it now appears in the catalog, subscribable.
+	// It appears in the catalog, subscribable; the not-yet-synced one does not.
 	cr := httptest.NewRequest(http.MethodGet, "/catalog", nil)
 	cr.Header.Set("Authorization", "Bearer "+tok)
 	crr := httptest.NewRecorder()
 	h.ServeHTTP(crr, cr)
 	body := crr.Body.String()
 	if !strings.Contains(body, "Synced Roster") || !strings.Contains(body, "/catalog/ds_synced/subscribe") {
-		t.Error("discovered dataset should appear in the catalog with a subscribe control")
+		t.Error("a synced dataset whose data landed should appear in the catalog")
 	}
-	// A user can subscribe to it → access granted.
+	if strings.Contains(body, "ds_pending") {
+		t.Error("a referenced dataset whose rows haven't synced must not be surfaced")
+	}
+	// A user can subscribe to the discovered dataset → access granted.
 	subr := httptest.NewRequest(http.MethodPost, "/catalog/ds_synced/subscribe", nil)
 	utok := kc.SignToken(t, map[string]any{"preferred_username": "s1", "realm_access": map[string]any{"roles": []string{"user"}}})
 	subr.Header.Set("Authorization", "Bearer "+utok)

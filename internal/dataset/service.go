@@ -138,46 +138,13 @@ func (s *Service) Import(ctx context.Context, token, name, delimiter string, kee
 	return ImportResult{Collection: collection, Imported: limit, Total: total, Capped: limit < total}, nil
 }
 
-// DatasetRef identifies a discovered generic dataset.
-type DatasetRef struct {
-	Collection string
-	Name       string
-}
-
-// reservedCollections are app/system peat collections that are not user
-// datasets and must never be surfaced in the catalog.
-var reservedCollections = map[string]bool{
-	"data_sources": true, "dataset_registry": true,
-	"weather_connectors": true, "http_connectors": true, "combined_sources": true,
-	"saved_views": true, "decks": true, "deck_slides": true,
-}
-
-// Discover enumerates dataset collections present in the peat node — including
-// ones synced in from peers or created by another node — that look like generic
-// datasets (they carry a dataset __meta__ doc). System collections are skipped.
-// This lets the catalog surface data that arrived via mesh sync.
-func (s *Service) Discover(ctx context.Context) ([]DatasetRef, error) {
-	cols, err := s.store.ListCollections(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]DatasetRef, 0, len(cols))
-	for _, c := range cols {
-		if reservedCollections[c] {
-			continue
-		}
-		// A generic dataset has a meta doc; anything else (domain collections,
-		// connector configs, …) returns an error here and is skipped.
-		name, _, err := s.store.Meta(ctx, c)
-		if err != nil {
-			continue
-		}
-		if name == "" {
-			name = c
-		}
-		out = append(out, DatasetRef{Collection: c, Name: name})
-	}
-	return out, nil
+// Exists reports whether a dataset's data is actually present in the peat node —
+// it fetches the collection's __meta__ document (GetDocument). Used to confirm a
+// data source's dataset has really synced in before surfacing it in the catalog,
+// rather than registering a reference whose rows haven't arrived.
+func (s *Service) Exists(ctx context.Context, collection string) bool {
+	_, _, err := s.store.Meta(ctx, collection)
+	return err == nil
 }
 
 // View returns a dataset's display name, column order, and rows.
