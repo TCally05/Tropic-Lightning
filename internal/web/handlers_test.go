@@ -637,3 +637,34 @@ func TestDashboardAdminViewSelector(t *testing.T) {
 		t.Error("non-admin dashboard should show the operator missions card")
 	}
 }
+
+func TestMissionsFilterByBase(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	pstore := pilots.NewMemoryStore()
+	ctx := context.Background()
+	_ = pstore.Put(ctx, pilots.Pilot{PilotID: "P1", Base: "Hill AFB", Aircraft: "F-16", MissionStatus: pilots.StatusAvailable})
+	_ = pstore.Put(ctx, pilots.Pilot{PilotID: "P2", Base: "Nellis AFB", Aircraft: "F-16", MissionStatus: pilots.StatusAvailable})
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pstore, ds, nil))
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	h := srv.Routes()
+	tok := kc.SignToken(t, map[string]any{"preferred_username": "s1", "realm_access": map[string]any{"roles": []string{"user"}}})
+
+	req := httptest.NewRequest(http.MethodGet, "/missions?base=Hill+AFB", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "P1") {
+		t.Error("Hill AFB pilot P1 should be listed")
+	}
+	if strings.Contains(body, ">P2<") || strings.Contains(body, "/pilots/P2/status") {
+		t.Error("Nellis pilot P2 should be filtered out")
+	}
+}

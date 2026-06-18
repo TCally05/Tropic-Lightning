@@ -433,28 +433,64 @@ func (s *Server) handlePilotsList(w http.ResponseWriter, r *http.Request) {
 // handleMissions renders the operator view: a readiness status wheel plus an
 // editable pilot list (mark grounded/available).
 func (s *Server) handleMissions(w http.ResponseWriter, r *http.Request) {
-	summary, err := s.pilots.ReadinessSummary(r.Context())
+	f := missionFilter(r)
+	res, err := s.pilots.Browse(r.Context(), f)
 	if err != nil {
-		http.Error(w, "failed to summarize: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to query pilots: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	all, err := s.pilots.List(r.Context())
-	if err != nil {
-		http.Error(w, "failed to list pilots: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	shown := all
+	shown := res.Pilots
 	if len(shown) > pilotsDisplayLimit {
 		shown = shown[:pilotsDisplayLimit]
 	}
 	s.render(w, "missions.html", map[string]any{
-		"Summary":  summary,
-		"AvailPct": summary.AvailablePct(),
-		"Pilots":   shown,
-		"Shown":    len(shown),
-		"Updated":  r.URL.Query().Get("updated"),
-		"Error":    r.URL.Query().Get("error"),
+		"Summary":      res.Summary,
+		"AvailPct":     res.Summary.AvailablePct(),
+		"GrandTotal":   res.GrandTotal,
+		"Facets":       res.Facets,
+		"Filter":       f,
+		"FilterActive": f.Active(),
+		"FilterQuery":  missionFilterQuery(f), // for preserving filters on edit
+		"Pilots":       shown,
+		"Shown":        len(shown),
+		"Updated":      r.URL.Query().Get("updated"),
+		"Error":        r.URL.Query().Get("error"),
 	})
+}
+
+// missionFilter reads the filter from the URL query. The edit form carries the
+// active filter in its action URL (not the body), so the body's "status" field
+// — the new mission status — never collides with the filter's "status".
+func missionFilter(r *http.Request) pilots.Filter {
+	q := r.URL.Query()
+	return pilots.Filter{
+		Base:     q.Get("base"),
+		Aircraft: q.Get("aircraft"),
+		Rank:     q.Get("rank"),
+		Status:   q.Get("status"),
+		Query:    q.Get("q"),
+	}
+}
+
+// missionFilterQuery encodes a filter as a URL query string (for redirects).
+func missionFilterQuery(f pilots.Filter) string {
+	v := url.Values{}
+	if f.Base != "" {
+		v.Set("base", f.Base)
+	}
+	if f.Aircraft != "" {
+		v.Set("aircraft", f.Aircraft)
+	}
+	if f.Rank != "" {
+		v.Set("rank", f.Rank)
+	}
+	if f.Status != "" {
+		v.Set("status", f.Status)
+	}
+	if f.Query != "" {
+		v.Set("q", f.Query)
+	}
+	return v.Encode()
 }
 
 // handlePilotStatus is the operator edit: set a pilot's mission availability.
@@ -471,12 +507,15 @@ func (s *Server) handlePilotStatus(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	status := r.PostFormValue("status")
 	note := r.PostFormValue("note")
+	// Preserve the operator's active filter across the edit redirect.
+	back := missionFilterQuery(missionFilter(r))
+
 	p, err := s.pilots.SetStatus(r.Context(), id, status, note, by)
 	if err != nil {
-		http.Redirect(w, r, "/missions?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/missions?"+back+"&error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/missions?updated="+url.QueryEscape(p.PilotID), http.StatusSeeOther)
+	http.Redirect(w, r, "/missions?"+back+"&updated="+url.QueryEscape(p.PilotID), http.StatusSeeOther)
 }
 
 // handleMissionsSummary returns the readiness rollup as JSON (for the wheel).
