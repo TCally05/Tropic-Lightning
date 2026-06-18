@@ -135,6 +135,19 @@ and they can open/visualize it; unsubscribing revokes it. There's no admin
 *Viewing as* preview. Subscriptions are stored as the dataset's subscriber list
 in the peat mesh, so `canAccessDataset` = admin **or** subscribed.
 
+### Combine data sources (join)
+
+Any user can **combine two data sources** into a virtual dataset by joining them
+on a shared key column (`/combine/new`). It's a **left join**: every row of the
+first source is matched to the second by key (the second is used as a lookup —
+one row per key value; unmatched left rows keep blank right columns). Right
+columns that clash with a left column are prefixed with the right source's name.
+The combined source is **computed live at view time** (never stored), so it stays
+fresh as its members update, and it's a normal dataset everywhere else — listed
+in the catalog, subscribable, filterable, and chartable (e.g. *avg temp by base*
+over `pilots ⋈ weather`). It's **read-only** (derived). Members are generic
+sources (file / weather / HTTP). Lives in `internal/combine/`.
+
 ### Saved views
 
 Filtering the same way every time you open a dataset gets old, so users can
@@ -252,7 +265,7 @@ cluster), not part of this package.
 
 ```bash
 # Build the image, then create the package (pulls the image from your daemon).
-docker build -t keycloak-portal:0.1.22 .
+docker build -t keycloak-portal:0.1.23 .
 zarf package create deploy/zarf --confirm
 
 # On the target cluster (must be `zarf init`-ed), deploy with your values:
@@ -285,7 +298,7 @@ and the UDS Operator takes over the wiring:
   node and Keycloak.
 
 ```bash
-docker build -t keycloak-portal:0.1.22 .
+docker build -t keycloak-portal:0.1.23 .
 zarf package create deploy/zarf --confirm --output deploy/zarf
 uds create deploy/uds --confirm
 uds deploy uds-bundle-keycloak-portal-*.tar.zst --confirm \

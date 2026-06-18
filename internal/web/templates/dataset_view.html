@@ -3,6 +3,7 @@
 {{$bq := .BackQuery}}
 {{$cols := .Columns}}
 {{$edit := .EditMode}}
+{{$ro := .ReadOnly}}
 {{/* filter querystring (without edit) for toggle links */}}
 {{$fq := ""}}
 {{if .FilterCol}}{{$fq = printf "&col=%s" (urlquery .FilterCol)}}{{end}}
@@ -14,16 +15,18 @@
 <div class="page-head toolbar">
   <div>
     <h1 style="margin:0;">{{.Name}}</h1>
-    <p class="muted" style="margin:.2rem 0 0; font-size:.85rem;">{{len .Columns}} columns · {{.Total}}{{if .FilterActive}} matching of {{.GrandTotal}}{{end}} rows{{if lt .Shown .Total}} (showing first {{.Shown}}){{end}}{{if .LiveConnector}} · <span class="pill accent">live</span>{{end}}</p>
+    <p class="muted" style="margin:.2rem 0 0; font-size:.85rem;">{{len .Columns}} columns · {{.Total}}{{if .FilterActive}} matching of {{.GrandTotal}}{{end}} rows{{if lt .Shown .Total}} (showing first {{.Shown}}){{end}}{{if .LiveConnector}} · <span class="pill accent">live</span>{{end}}{{if .Combined}} · <span class="pill accent">combined</span>{{end}}</p>
   </div>
   <span class="spacer"></span>
   {{if .LiveConnector}}
   <form method="POST" action="/datasets/{{$coll}}/refresh?{{safeurl $bq}}" style="display:inline;"><button class="btn go sm" type="submit">↻ Refresh now</button></form>
   {{end}}
+  {{if not .ReadOnly}}
   {{if $edit}}
     <a class="btn sm" href="/datasets/{{$coll}}{{if $fq}}?{{safeurl (slice $fq 1)}}{{end}}">✓ Done editing</a>
   {{else}}
     <a class="btn ghost sm" href="/datasets/{{$coll}}?edit=1{{safeurl $fq}}">✎ Edit rows</a>
+  {{end}}
   {{end}}
 </div>
 
@@ -227,7 +230,7 @@
             {{if $edit}}<form method="POST" action="/datasets/{{$coll}}/columns/delete?{{safeurl $bq}}" style="display:inline;" onsubmit="return confirm('Delete column {{.}}? This removes its values.');"><input type="hidden" name="name" value="{{.}}"><button type="submit" title="delete column" style="border:none;background:none;color:var(--red);cursor:pointer;font-weight:700;">×</button></form>{{end}}
           </th>
           {{end}}
-          <th></th>
+          {{if not $ro}}<th></th>{{end}}
         </tr>
       </thead>
       <tbody id="rows">
@@ -239,7 +242,7 @@
             <td><button class="btn danger sm" type="button" onclick="removeRow(this)">Remove</button></td>
           {{else}}
             {{range $cols}}<td>{{index $row.Fields .}}</td>{{end}}
-            <td style="text-align:right;"><form method="POST" action="/datasets/{{$coll}}/rows/delete?{{safeurl $bq}}" style="display:inline;" onsubmit="return confirm('Delete this row?');"><input type="hidden" name="id" value="{{$row.ID}}"><button class="btn danger sm" type="submit">Delete</button></form></td>
+            {{if not $ro}}<td style="text-align:right;"><form method="POST" action="/datasets/{{$coll}}/rows/delete?{{safeurl $bq}}" style="display:inline;" onsubmit="return confirm('Delete this row?');"><input type="hidden" name="id" value="{{$row.ID}}"><button class="btn danger sm" type="submit">Delete</button></form></td>{{end}}
           {{end}}
         </tr>
         {{end}}
@@ -247,7 +250,7 @@
     </table>
   </div>
   {{else}}
-    <div class="empty">No rows yet{{if $edit}} — click “+ Add row”{{else if .LiveConnector}} — click “Refresh now”{{else}} — switch to Edit rows to add some{{end}}.</div>
+    <div class="empty">No rows yet{{if $edit}} — click “+ Add row”{{else if .LiveConnector}} — click “Refresh now”{{else if .Combined}} — no rows produced (check that the join keys match){{else}} — switch to Edit rows to add some{{end}}.</div>
   {{end}}
 </div>
 

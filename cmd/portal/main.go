@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"github.com/defenseunicorns/keycloak-portal/internal/auth"
+	"github.com/defenseunicorns/keycloak-portal/internal/combine"
 	"github.com/defenseunicorns/keycloak-portal/internal/config"
 	"github.com/defenseunicorns/keycloak-portal/internal/dataset"
 	"github.com/defenseunicorns/keycloak-portal/internal/datasource"
@@ -131,7 +132,15 @@ func run() error {
 	defer viewStore.Close()
 	viewService := views.NewService(viewStore)
 
-	srv, err := web.NewServer(authn, cfg, dsService, pilotService, datasetService, operatorService, weatherService, httpService, viewService)
+	// Combined sources: virtual datasets joining two sources, computed live.
+	combineStore, err := combine.NewPeatStore(cfg.PeatNodeAddr, creds)
+	if err != nil {
+		return err
+	}
+	defer combineStore.Close()
+	combineService := combine.NewService(combineStore, datasetService)
+
+	srv, err := web.NewServer(authn, cfg, dsService, pilotService, datasetService, operatorService, weatherService, httpService, viewService, combineService)
 	if err != nil {
 		return err
 	}

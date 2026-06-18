@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/defenseunicorns/keycloak-portal/internal/auth"
+	"github.com/defenseunicorns/keycloak-portal/internal/combine"
 	"github.com/defenseunicorns/keycloak-portal/internal/config"
 	"github.com/defenseunicorns/keycloak-portal/internal/dataset"
 	"github.com/defenseunicorns/keycloak-portal/internal/datasource"
@@ -52,11 +53,12 @@ type Server struct {
 	weather     *weather.Service
 	httpsource  *httpsource.Service
 	views       *views.Service
+	combine     *combine.Service
 }
 
 // NewServer parses templates and returns a Server ready to register routes.
 // weather and httpsrc may be nil (no live connectors configured).
-func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Service, pl *pilots.Service, dsets *dataset.Service, ops *operators.Service, wx *weather.Service, httpsrc *httpsource.Service, vw *views.Service) (*Server, error) {
+func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Service, pl *pilots.Service, dsets *dataset.Service, ops *operators.Service, wx *weather.Service, httpsrc *httpsource.Service, vw *views.Service, cmb *combine.Service) (*Server, error) {
 	// tmpl is captured by the partial func below; assigned after parsing so the
 	// shared layout can render a page's content block by name.
 	var tmpl *template.Template
@@ -80,7 +82,7 @@ func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Ser
 		return nil, err
 	}
 	tmpl = t
-	return &Server{auth: authn, cfg: cfg, templates: t, dataSources: ds, pilots: pl, datasets: dsets, operators: ops, weather: wx, httpsource: httpsrc, views: vw}, nil
+	return &Server{auth: authn, cfg: cfg, templates: t, dataSources: ds, pilots: pl, datasets: dsets, operators: ops, weather: wx, httpsource: httpsrc, views: vw, combine: cmb}, nil
 }
 
 // Routes wires up the HTTP routes and middleware, returning the root handler.
@@ -146,6 +148,11 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /catalog", authed(s.handleCatalogPage))
 	mux.Handle("POST /catalog/{key}/subscribe", authed(s.handleSubscribe))
 	mux.Handle("POST /catalog/{key}/unsubscribe", authed(s.handleUnsubscribe))
+
+	// Combine data sources: any authenticated user joins two sources by a key.
+	mux.Handle("GET /combine/new", authed(s.handleCombineNew))
+	mux.Handle("POST /combine", authed(s.handleCombineCreate))
+	mux.Handle("POST /combine/{key}/delete", authed(s.handleCombineDelete))
 
 	// Dataset access (authenticated; per-dataset subscription enforced in-handler).
 	mux.Handle("GET /datasets/{collection}", authed(s.handleDatasetView))
@@ -750,7 +757,23 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	name, cols, rows, err := s.datasets.View(ctx, collection)
+	// A combined source is virtual: compute its joined rows live. It's read-only
+	// (derived) so row/column editing and connector refresh don't apply.
+	var name string
+	var cols []string
+	var rows []dataset.Row
+	var err error
+	combined := false
+	if s.combine != nil {
+		if _, ok, _ := s.combine.Get(ctx, collection); ok {
+			combined = true
+			editMode = false
+			name, cols, rows, err = s.combine.Compute(ctx, collection)
+		}
+	}
+	if !combined {
+		name, cols, rows, err = s.datasets.View(ctx, collection)
+	}
 	if err != nil {
 		http.Error(w, "failed to load dataset: "+err.Error(), http.StatusNotFound)
 		return
@@ -842,8 +865,11 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		"HasLine":       hasLine,
 		"IsAdmin":       s.auth.IsAdmin(claimsOf(r)),
 		// wx_ (weather) and api_ (HTTP/JSON) datasets are backed by a live
-		// connector and can be re-pulled on demand.
-		"LiveConnector": strings.HasPrefix(collection, "wx_") || strings.HasPrefix(collection, "api_"),
+		// connector and can be re-pulled on demand. Combined sources are virtual
+		// (computed live) and read-only.
+		"LiveConnector": !combined && (strings.HasPrefix(collection, "wx_") || strings.HasPrefix(collection, "api_")),
+		"ReadOnly":      combined,
+		"Combined":      combined,
 		"SavedViews":    vms,
 		"HasViews":      s.views != nil,
 		"ActiveView":    activeView,
@@ -1267,6 +1293,20 @@ func (s *Server) reconcileDatasets(ctx context.Context) {
 			}
 		}
 	}
+	// Combined sources are virtual datasets; register them so they're listed and
+	// subscribable in the catalog.
+	if s.combine != nil {
+		combos, err := s.combine.List(ctx)
+		if err != nil {
+			slog.Warn("reconcile: list combined sources", "err", err)
+			return
+		}
+		for _, c := range combos {
+			if err := s.operators.RegisterDataset(ctx, c.Key, c.Name, operators.KindCombined, c.Key); err != nil {
+				slog.Warn("reconcile combined source", "key", c.Key, "err", err)
+			}
+		}
+	}
 }
 
 func (s *Server) handleOperatorsPage(w http.ResponseWriter, r *http.Request) {
@@ -1362,6 +1402,96 @@ func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.operators.Unsubscribe(r.Context(), r.PathValue("key"), me); err != nil {
+		http.Redirect(w, r, "/catalog?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/catalog", http.StatusSeeOther)
+}
+
+// --- combine data sources (any authenticated user) ---
+
+// combinableDatasets returns generic datasets (uploaded / weather / HTTP) with
+// their columns — the sources eligible to be joined. Pilots and existing
+// combined sources are excluded (their rows aren't plain string maps / would
+// nest).
+func (s *Server) combinableDatasets(ctx context.Context) []map[string]any {
+	sets, err := s.operators.ListDatasets(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(sets))
+	for _, d := range sets {
+		if d.Kind != operators.KindGeneric {
+			continue
+		}
+		_, cols, _, err := s.datasets.View(ctx, d.Collection)
+		if err != nil {
+			continue
+		}
+		out = append(out, map[string]any{"Collection": d.Collection, "Name": d.Name, "Columns": cols})
+	}
+	return out
+}
+
+// handleCombineNew renders the join builder.
+func (s *Server) handleCombineNew(w http.ResponseWriter, r *http.Request) {
+	if s.combine == nil {
+		http.Redirect(w, r, "/catalog", http.StatusSeeOther)
+		return
+	}
+	s.reconcileDatasets(r.Context())
+	sources := s.combinableDatasets(r.Context())
+	cols := map[string][]string{}
+	for _, d := range sources {
+		cols[d["Collection"].(string)] = d["Columns"].([]string)
+	}
+	colsJSON, _ := json.Marshal(cols)
+	s.render(w, r, "combine_new.html", "Combine data sources", "catalog", map[string]any{
+		"Sources":     sources,
+		"ColumnsJSON": template.JS(colsJSON),
+		"Error":       r.URL.Query().Get("error"),
+	})
+}
+
+// handleCombineCreate builds a combined source, registers + subscribes the
+// creator, and opens it.
+func (s *Server) handleCombineCreate(w http.ResponseWriter, r *http.Request) {
+	if s.combine == nil {
+		http.Redirect(w, r, "/catalog", http.StatusSeeOther)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/combine/new?error="+url.QueryEscape("invalid form"), http.StatusSeeOther)
+		return
+	}
+	me := s.operatorName(claimsOf(r))
+	c, err := s.combine.Create(r.Context(), combine.Input{
+		Name:  r.PostFormValue("name"),
+		Owner: me,
+		Left:  combine.Member{Collection: r.PostFormValue("left"), Key: r.PostFormValue("left_key")},
+		Right: combine.Member{Collection: r.PostFormValue("right"), Key: r.PostFormValue("right_key")},
+	})
+	if err != nil {
+		http.Redirect(w, r, "/combine/new?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		return
+	}
+	if err := s.operators.RegisterDataset(r.Context(), c.Key, c.Name, operators.KindCombined, c.Key); err != nil {
+		slog.Warn("register combined source", "err", err)
+	}
+	if me != "" {
+		_ = s.operators.Subscribe(r.Context(), c.Key, me) // creator auto-subscribes
+	}
+	http.Redirect(w, r, "/datasets/"+c.Key, http.StatusSeeOther)
+}
+
+// handleCombineDelete removes a combined source (and its registry entry).
+func (s *Server) handleCombineDelete(w http.ResponseWriter, r *http.Request) {
+	if s.combine == nil {
+		http.Redirect(w, r, "/catalog", http.StatusSeeOther)
+		return
+	}
+	key := r.PathValue("key")
+	if err := s.combine.Delete(r.Context(), key); err != nil {
 		http.Redirect(w, r, "/catalog?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}

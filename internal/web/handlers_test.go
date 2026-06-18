@@ -13,6 +13,7 @@ import (
 
 	"github.com/defenseunicorns/keycloak-portal/internal/auth"
 	"github.com/defenseunicorns/keycloak-portal/internal/authtest"
+	"github.com/defenseunicorns/keycloak-portal/internal/combine"
 	"github.com/defenseunicorns/keycloak-portal/internal/dataset"
 	"github.com/defenseunicorns/keycloak-portal/internal/datasource"
 	"github.com/defenseunicorns/keycloak-portal/internal/httpsource"
@@ -30,7 +31,7 @@ func newServer(t *testing.T, kc *authtest.Keycloak) http.Handler {
 	pl := pilots.NewService(pilots.NewMemoryStore(), ds, nil)
 	dsets := dataset.NewService(dataset.NewMemoryStore(), ds, nil)
 	ops := operators.NewService(operators.NewMemoryStore())
-	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pl, dsets, ops, nil, nil, nil)
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pl, dsets, ops, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -554,7 +555,7 @@ func opServer(t *testing.T, kc *authtest.Keycloak, pstore *pilots.MemoryStore, o
 	t.Helper()
 	ds := datasource.NewService(datasource.NewMemoryStore())
 	pl := pilots.NewService(pstore, ds, nil)
-	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pl, dataset.NewService(dataset.NewMemoryStore(), ds, nil), ops, nil, nil, nil)
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pl, dataset.NewService(dataset.NewMemoryStore(), ds, nil), ops, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -802,7 +803,7 @@ func TestCatalogReconcilesUploadedDatasets(t *testing.T) {
 	ops := operators.NewService(operators.NewMemoryStore())
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
 		pilots.NewService(pilots.NewMemoryStore(), ds, nil),
-		dataset.NewService(dataset.NewMemoryStore(), ds, nil), ops, nil, nil, nil)
+		dataset.NewService(dataset.NewMemoryStore(), ds, nil), ops, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -834,7 +835,7 @@ func TestSelfSubscribeGrantsAccess(t *testing.T) {
 	dsvc := dataset.NewService(dstore, ds, nil)
 	ops := operators.NewService(operators.NewMemoryStore())
 	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
-	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
 	h := srv.Routes()
 	tok := kc.SignToken(t, map[string]any{"preferred_username": "s1", "realm_access": map[string]any{"roles": []string{"user"}}})
 	req := func(method, target string) *httptest.ResponseRecorder {
@@ -886,7 +887,7 @@ func TestOperatorCanEditAssignedDataset(t *testing.T) {
 	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil)
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -938,7 +939,7 @@ func TestOperatorUpdatesExistingRow(t *testing.T) {
 	ops := operators.NewService(operators.NewMemoryStore())
 	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
 	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
-	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
 	h := srv.Routes()
 
 	tok := kc.SignToken(t, map[string]any{"preferred_username": "s4", "realm_access": map[string]any{"roles": []string{"user"}}})
@@ -973,7 +974,7 @@ func TestOperatorBulkSave(t *testing.T) {
 	ops := operators.NewService(operators.NewMemoryStore())
 	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
 	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
-	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
 	h := srv.Routes()
 
 	body := `{"rows":[{"id":"r000001","fields":{"name":"Alice","status":"grounded"}},{"id":"","fields":{"name":"Bob","status":"ok"}}],"deletes":[]}`
@@ -1065,7 +1066,7 @@ func TestDatasetStatusWheel(t *testing.T) {
 	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil)
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1116,7 +1117,7 @@ func TestWeatherConnectorCreateFlow(t *testing.T) {
 	wx.SetBaseURL(api.URL)
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, wx, nil, nil)
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, wx, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1175,7 +1176,7 @@ func TestHTTPSourceCreateAndRefresh(t *testing.T) {
 	hs := httpsource.NewService(httpsource.NewMemoryStore(), dstore, nil)
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, hs, nil)
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, hs, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1233,7 +1234,7 @@ func TestSavedViewsFlow(t *testing.T) {
 	vw := views.NewService(views.NewMemoryStore())
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, vw)
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, vw, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1337,7 +1338,7 @@ func TestSavedViewsSwitch(t *testing.T) {
 	ready, _ := vw.Save(ctx, views.View{Owner: "alice", Collection: "ds_x", Name: "Ready", FilterCol: "status", FilterVal: "ready"})
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, vw)
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, vw, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1387,7 +1388,7 @@ func TestDatasetBarAndStats(t *testing.T) {
 	_ = ops.RegisterDataset(ctx, "ds_r", "Roster", operators.KindGeneric, "ds_r")
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil)
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1434,7 +1435,7 @@ func TestVizSwitchApplies(t *testing.T) {
 	ops := operators.NewService(operators.NewMemoryStore())
 	_ = ops.RegisterDataset(ctx, "ds_r", "R", operators.KindGeneric, "ds_r")
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil)
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1460,5 +1461,82 @@ func TestVizSwitchApplies(t *testing.T) {
 	body := grr.Body.String()
 	if !strings.Contains(body, "by base") || strings.Contains(body, "conic-gradient") {
 		t.Error("switched view should render the bar chart, not the wheel")
+	}
+}
+
+func TestCombineSourcesFlow(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	// Two generic datasets sharing a "base" column.
+	_ = dstore.PutMeta(ctx, "ds_pilots", "Pilots", []string{"id", "base"})
+	_ = dstore.PutRow(ctx, "ds_pilots", "r1", map[string]string{"id": "1", "base": "Hill"})
+	_ = dstore.PutRow(ctx, "ds_pilots", "r2", map[string]string{"id": "2", "base": "Hill"})
+	_ = dstore.PutRow(ctx, "ds_pilots", "r3", map[string]string{"id": "3", "base": "Ramstein"})
+	_ = dstore.PutMeta(ctx, "ds_wx", "Weather", []string{"base", "temp"})
+	_ = dstore.PutRow(ctx, "ds_wx", "w1", map[string]string{"base": "Hill", "temp": "31"})
+	_ = dstore.PutRow(ctx, "ds_wx", "w2", map[string]string{"base": "Ramstein", "temp": "19"})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_pilots", "Pilots", operators.KindGeneric, "ds_pilots")
+	_ = ops.RegisterDataset(ctx, "ds_wx", "Weather", operators.KindGeneric, "ds_wx")
+	cmb := combine.NewService(combine.NewMemoryStore(), dsvc)
+
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, cmb)
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	h := srv.Routes()
+	tok := adminToken(t, kc)
+	get := func(target string) (int, string, string) {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String(), rec.Header().Get("Location")
+	}
+
+	// The builder lists the two generic sources.
+	if code, body, _ := get("/combine/new"); code != http.StatusOK || !strings.Contains(body, "Pilots") || !strings.Contains(body, "Weather") {
+		t.Fatalf("combine builder = %d, should list both sources", code)
+	}
+
+	// Create the join on base.
+	form := url.Values{"name": {"PW"}, "left": {"ds_pilots"}, "left_key": {"base"}, "right": {"ds_wx"}, "right_key": {"base"}}
+	cr := httptest.NewRequest(http.MethodPost, "/combine", strings.NewReader(form.Encode()))
+	cr.Header.Set("Authorization", "Bearer "+tok)
+	cr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	crr := httptest.NewRecorder()
+	h.ServeHTTP(crr, cr)
+	if crr.Code != http.StatusSeeOther || crr.Header().Get("Location") != "/datasets/cmb_pw" {
+		t.Fatalf("create = %d -> %q", crr.Code, crr.Header().Get("Location"))
+	}
+
+	// Opening the combined source shows joined rows (Hill rows carry temp 31).
+	code, body, _ := get("/datasets/cmb_pw")
+	if code != http.StatusOK {
+		t.Fatalf("open combined = %d", code)
+	}
+	if !strings.Contains(body, "combined") || !strings.Contains(body, ">temp<") || !strings.Contains(body, ">31<") {
+		t.Errorf("combined view should show the joined temp column + values")
+	}
+	// It's read-only: no edit toggle.
+	if strings.Contains(body, "Edit rows") {
+		t.Error("combined source should be read-only (no Edit rows)")
+	}
+
+	// A chart over the combined data works: avg temp by base.
+	_, chart, _ := get("/datasets/cmb_pw?vtype=bar&vgroup=base&vval=temp&vagg=avg&view=x")
+	if !strings.Contains(chart, "avg of temp by base") {
+		t.Error("combined source should support charting the joined columns")
+	}
+
+	// It appears in the catalog as a combined source.
+	if _, cat, _ := get("/catalog"); !strings.Contains(cat, "cmb_pw") || !strings.Contains(cat, "combined") {
+		t.Error("combined source should be listed in the catalog")
 	}
 }
