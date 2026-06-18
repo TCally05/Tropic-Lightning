@@ -26,7 +26,6 @@ import (
 	"github.com/defenseunicorns/keycloak-portal/internal/datasource"
 	"github.com/defenseunicorns/keycloak-portal/internal/httpsource"
 	"github.com/defenseunicorns/keycloak-portal/internal/operators"
-	"github.com/defenseunicorns/keycloak-portal/internal/pilots"
 	"github.com/defenseunicorns/keycloak-portal/internal/views"
 	"github.com/defenseunicorns/keycloak-portal/internal/weather"
 )
@@ -48,7 +47,6 @@ type Server struct {
 	cfg         *config.Config
 	templates   *template.Template
 	dataSources *datasource.Service
-	pilots      *pilots.Service
 	datasets    *dataset.Service
 	operators   *operators.Service
 	weather     *weather.Service
@@ -59,7 +57,7 @@ type Server struct {
 
 // NewServer parses templates and returns a Server ready to register routes.
 // weather and httpsrc may be nil (no live connectors configured).
-func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Service, pl *pilots.Service, dsets *dataset.Service, ops *operators.Service, wx *weather.Service, httpsrc *httpsource.Service, vw *views.Service, cmb *combine.Service) (*Server, error) {
+func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Service, dsets *dataset.Service, ops *operators.Service, wx *weather.Service, httpsrc *httpsource.Service, vw *views.Service, cmb *combine.Service) (*Server, error) {
 	// tmpl is captured by the partial func below; assigned after parsing so the
 	// shared layout can render a page's content block by name.
 	var tmpl *template.Template
@@ -83,7 +81,7 @@ func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Ser
 		return nil, err
 	}
 	tmpl = t
-	return &Server{auth: authn, cfg: cfg, templates: t, dataSources: ds, pilots: pl, datasets: dsets, operators: ops, weather: wx, httpsource: httpsrc, views: vw, combine: cmb}, nil
+	return &Server{auth: authn, cfg: cfg, templates: t, dataSources: ds, datasets: dsets, operators: ops, weather: wx, httpsource: httpsrc, views: vw, combine: cmb}, nil
 }
 
 // Routes wires up the HTTP routes and middleware, returning the root handler.
@@ -135,11 +133,6 @@ func (s *Server) Routes() http.Handler {
 	// Generic HTTP/JSON connector: admin configures URL + record path + auth.
 	mux.Handle("POST /datasources/http", admin(s.handleHTTPSourceCreate))
 
-	// Pilots import/manage (admin-only).
-	mux.Handle("GET /pilots", admin(s.handlePilotsPage))
-	mux.Handle("POST /pilots/import", admin(s.handlePilotsImport))
-	mux.Handle("GET /api/pilots", admin(s.handlePilotsList))
-
 	// Operators registry (admin-only) — used for the dashboard "view as" preview.
 	mux.Handle("GET /operators", admin(s.handleOperatorsPage))
 	mux.Handle("POST /operators", admin(s.handleOperatorCreate))
@@ -172,9 +165,6 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /datasets/{collection}/views", authed(s.handleViewSave))
 	mux.Handle("POST /datasets/{collection}/views/{id}/delete", authed(s.handleViewDelete))
 	mux.Handle("POST /datasets/{collection}/views/{id}/default", authed(s.handleViewSetDefault))
-	mux.Handle("GET /missions", authed(s.handleMissions))
-	mux.Handle("POST /pilots/{id}/status", authed(s.handlePilotStatus))
-	mux.Handle("GET /api/missions/summary", authed(s.handleMissionsSummary))
 
 	return logging(mux)
 }
@@ -814,8 +804,8 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	shown := filtered
-	if len(shown) > pilotsDisplayLimit {
-		shown = shown[:pilotsDisplayLimit]
+	if len(shown) > datasetDisplayLimit {
+		shown = shown[:datasetDisplayLimit]
 	}
 
 	// Effective visualization: a saved view's override (v* params in the URL)
@@ -1319,14 +1309,12 @@ func (s *Server) forbidden(w http.ResponseWriter, r *http.Request) {
 
 // --- operators & assignments (admin only) ---
 
-// reconcileDatasets ensures the assignment registry contains the pilots dataset
-// and every uploaded dataset present in the data-source catalog (dataset://
-// entries), so they all show up as assignable. Idempotent; preserves existing
-// assignments.
+// reconcileDatasets ensures the registry contains every uploaded/live dataset
+// present in the data-source catalog (dataset:// entries) plus combined sources,
+// so they all show up in the catalog. Idempotent; preserves subscriptions.
 func (s *Server) reconcileDatasets(ctx context.Context) {
-	if err := s.operators.RegisterDataset(ctx, "pilots", "USAF Pilots", operators.KindPilots, "pilots"); err != nil {
-		slog.Warn("reconcile pilots dataset", "err", err)
-	}
+	// Drop the legacy "pilots" demo dataset if it lingers from older versions.
+	_ = s.operators.DeleteDataset(ctx, "pilots")
 	sources, err := s.dataSources.List(ctx)
 	if err != nil {
 		slog.Warn("reconcile: list data sources", "err", err)
@@ -1410,9 +1398,6 @@ func (s *Server) handleCatalogPage(w http.ResponseWriter, r *http.Request) {
 	subscribed := 0
 	for _, d := range sets {
 		open := "/datasets/" + d.Collection
-		if d.Kind == operators.KindPilots {
-			open = "/missions"
-		}
 		sub := d.AssignedToUser(me)
 		if sub {
 			subscribed++
@@ -1552,173 +1537,8 @@ func (s *Server) handleCombineDelete(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/catalog", http.StatusSeeOther)
 }
 
-// pilotsDisplayLimit caps how many rows the HTML table renders (the full set is
-// still ingested and available via /api/pilots).
-const pilotsDisplayLimit = 200
-
-// handlePilotsPage shows the imported pilots with an Import button and mesh status.
-func (s *Server) handlePilotsPage(w http.ResponseWriter, r *http.Request) {
-	all, err := s.pilots.List(r.Context())
-	if err != nil {
-		http.Error(w, "failed to list pilots: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	shown := all
-	if len(shown) > pilotsDisplayLimit {
-		shown = shown[:pilotsDisplayLimit]
-	}
-	_, connected := s.peatStatus(r.Context())
-	s.render(w, r, "pilots.html", "USAF pilots", "pilots", map[string]any{
-		"Pilots":        shown,
-		"Total":         len(all),
-		"Shown":         len(shown),
-		"Limit":         pilotsDisplayLimit,
-		"Imported":      r.URL.Query().Get("imported"),
-		"Error":         r.URL.Query().Get("error"),
-		"PeatConnected": connected,
-	})
-}
-
-// handlePilotsImport ingests the embedded dataset into peat, then redirects back.
-func (s *Server) handlePilotsImport(w http.ResponseWriter, r *http.Request) {
-	// Bound the bulk write so a slow/unreachable node doesn't hang the request.
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-	n, err := s.pilots.Import(ctx)
-	if err != nil {
-		http.Redirect(w, r, "/pilots?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-	if err := s.operators.RegisterDataset(ctx, "pilots", "USAF Pilots", operators.KindPilots, "pilots"); err != nil {
-		slog.Warn("register pilots dataset", "err", err)
-	}
-	http.Redirect(w, r, "/pilots?imported="+strconv.Itoa(n), http.StatusSeeOther)
-}
-
-// handlePilotsList is the JSON API listing of ingested pilots.
-func (s *Server) handlePilotsList(w http.ResponseWriter, r *http.Request) {
-	all, err := s.pilots.List(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if all == nil {
-		all = []pilots.Pilot{}
-	}
-	writeJSON(w, http.StatusOK, all)
-}
-
-// --- mission readiness (operator: any authenticated user) ---
-
-// handleMissions renders the operator view: a readiness status wheel plus an
-// editable pilot list (mark grounded/available).
-func (s *Server) handleMissions(w http.ResponseWriter, r *http.Request) {
-	if !s.canAccessDataset(r, "pilots") {
-		s.forbidden(w, r)
-		return
-	}
-	f := missionFilter(r)
-	res, err := s.pilots.Browse(r.Context(), f)
-	if err != nil {
-		http.Error(w, "failed to query pilots: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	shown := res.Pilots
-	if len(shown) > pilotsDisplayLimit {
-		shown = shown[:pilotsDisplayLimit]
-	}
-	s.render(w, r, "missions.html", "Mission readiness", "missions", map[string]any{
-		"Summary":      res.Summary,
-		"AvailPct":     res.Summary.AvailablePct(),
-		"GrandTotal":   res.GrandTotal,
-		"Facets":       res.Facets,
-		"Filter":       f,
-		"FilterActive": f.Active(),
-		"FilterQuery":  missionFilterQuery(f), // for preserving filters on edit
-		"Pilots":       shown,
-		"Shown":        len(shown),
-		"Updated":      r.URL.Query().Get("updated"),
-		"Error":        r.URL.Query().Get("error"),
-	})
-}
-
-// missionFilter reads the filter from the URL query. The edit form carries the
-// active filter in its action URL (not the body), so the body's "status" field
-// — the new mission status — never collides with the filter's "status".
-func missionFilter(r *http.Request) pilots.Filter {
-	q := r.URL.Query()
-	return pilots.Filter{
-		Base:     q.Get("base"),
-		Aircraft: q.Get("aircraft"),
-		Rank:     q.Get("rank"),
-		Status:   q.Get("status"),
-		Query:    q.Get("q"),
-	}
-}
-
-// missionFilterQuery encodes a filter as a URL query string (for redirects).
-func missionFilterQuery(f pilots.Filter) string {
-	v := url.Values{}
-	if f.Base != "" {
-		v.Set("base", f.Base)
-	}
-	if f.Aircraft != "" {
-		v.Set("aircraft", f.Aircraft)
-	}
-	if f.Rank != "" {
-		v.Set("rank", f.Rank)
-	}
-	if f.Status != "" {
-		v.Set("status", f.Status)
-	}
-	if f.Query != "" {
-		v.Set("q", f.Query)
-	}
-	return v.Encode()
-}
-
-// handlePilotStatus is the operator edit: set a pilot's mission availability.
-func (s *Server) handlePilotStatus(w http.ResponseWriter, r *http.Request) {
-	if !s.canAccessDataset(r, "pilots") {
-		s.forbidden(w, r)
-		return
-	}
-	claims, _ := auth.ClaimsFromContext(r.Context())
-	by := ""
-	if claims != nil {
-		by = firstNonEmpty(claims.PreferredUsername, claims.Name, claims.Subject)
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/missions?error="+url.QueryEscape("invalid form"), http.StatusSeeOther)
-		return
-	}
-	id := r.PathValue("id")
-	status := r.PostFormValue("status")
-	note := r.PostFormValue("note")
-	// Preserve the operator's active filter across the edit redirect.
-	back := missionFilterQuery(missionFilter(r))
-
-	p, err := s.pilots.SetStatus(r.Context(), id, status, note, by)
-	if err != nil {
-		http.Redirect(w, r, "/missions?"+back+"&error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
-		return
-	}
-	http.Redirect(w, r, "/missions?"+back+"&updated="+url.QueryEscape(p.PilotID), http.StatusSeeOther)
-}
-
-// handleMissionsSummary returns the readiness rollup as JSON (for the wheel).
-func (s *Server) handleMissionsSummary(w http.ResponseWriter, r *http.Request) {
-	if !s.canAccessDataset(r, "pilots") {
-		s.forbidden(w, r)
-		return
-	}
-	summary, err := s.pilots.ReadinessSummary(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, summary)
-}
+// datasetDisplayLimit caps how many rows the dataset table renders at once.
+const datasetDisplayLimit = 200
 
 // --- helpers ---
 

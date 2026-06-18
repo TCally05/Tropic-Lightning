@@ -151,7 +151,7 @@ columns that clash with a left column are prefixed with the right source's name.
 The combined source is **computed live at view time** (never stored), so it stays
 fresh as its members update, and it's a normal dataset everywhere else — listed
 in the catalog, subscribable, filterable, and chartable (e.g. *avg temp by base*
-over `pilots ⋈ weather`). It's **read-only** (derived). Members are generic
+over `roster ⋈ weather`). It's **read-only** (derived). Members are generic
 sources (file / weather / HTTP). Lives in `internal/combine/`.
 
 ### Saved views
@@ -271,7 +271,7 @@ cluster), not part of this package.
 
 ```bash
 # Build the image, then create the package (pulls the image from your daemon).
-docker build -t keycloak-portal:0.1.25 .
+docker build -t keycloak-portal:0.1.26 .
 zarf package create deploy/zarf --confirm
 
 # On the target cluster (must be `zarf init`-ed), deploy with your values:
@@ -304,7 +304,7 @@ and the UDS Operator takes over the wiring:
   node and Keycloak.
 
 ```bash
-docker build -t keycloak-portal:0.1.25 .
+docker build -t keycloak-portal:0.1.26 .
 zarf package create deploy/zarf --confirm --output deploy/zarf
 uds create deploy/uds --confirm
 uds deploy uds-bundle-keycloak-portal-*.tar.zst --confirm \
