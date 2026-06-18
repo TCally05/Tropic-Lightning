@@ -63,4 +63,5 @@ type Store interface {
 	PutDataset(ctx context.Context, d Dataset) error
 	GetDataset(ctx context.Context, key string) (Dataset, error)
 	ListDatasets(ctx context.Context) ([]Dataset, error)
+	DeleteDataset(ctx context.Context, key string) error
 }

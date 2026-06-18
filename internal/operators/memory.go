@@ -60,6 +60,13 @@ func (s *MemoryStore) GetDataset(_ context.Context, key string) (Dataset, error)
 	return d, nil
 }
 
+func (s *MemoryStore) DeleteDataset(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sets, key)
+	return nil
+}
+
 func (s *MemoryStore) ListDatasets(_ context.Context) ([]Dataset, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

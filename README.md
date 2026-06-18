@@ -132,8 +132,14 @@ Subscribing is what grants access — the dataset then appears on their dashboar
 and they can open/visualize it; unsubscribing revokes it. There's no admin
 "assign datasets to users" step. Admins still create/delete data sources
 (under *Manage*) and register operator identities for the dashboard's
-*Viewing as* preview. Subscriptions are stored as the dataset's subscriber list
+*Viewing as* selector. Subscriptions are stored as the dataset's subscriber list
 in the peat mesh, so `canAccessDataset` = admin **or** subscribed.
+
+**Impersonation.** When an admin picks an operator in *Viewing as*, that persona
+is remembered in a cookie and a banner shows on every page. While active, the
+admin **impersonates** that user — subscribe/unsubscribe, saved views, and
+combined-source ownership all apply to the operator, not the admin. Exit returns
+to the admin's own identity.
 
 ### Combine data sources (join)
 
@@ -265,7 +271,7 @@ cluster), not part of this package.
 
 ```bash
 # Build the image, then create the package (pulls the image from your daemon).
-docker build -t keycloak-portal:0.1.23 .
+docker build -t keycloak-portal:0.1.25 .
 zarf package create deploy/zarf --confirm
 
 # On the target cluster (must be `zarf init`-ed), deploy with your values:
@@ -298,7 +304,7 @@ and the UDS Operator takes over the wiring:
   node and Keycloak.
 
 ```bash
-docker build -t keycloak-portal:0.1.23 .
+docker build -t keycloak-portal:0.1.25 .
 zarf package create deploy/zarf --confirm --output deploy/zarf
 uds create deploy/uds --confirm
 uds deploy uds-bundle-keycloak-portal-*.tar.zst --confirm \
