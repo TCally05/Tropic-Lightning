@@ -99,6 +99,14 @@ func (s *PeatStore) GetDataset(ctx context.Context, key string) (Dataset, error)
 	return d, nil
 }
 
+func (s *PeatStore) DeleteDataset(ctx context.Context, key string) error {
+	_, err := s.client.DeleteDocument(ctx, &sidecarv1.DeleteDocumentRequest{Collection: datasetsCollection, DocId: key})
+	if err != nil {
+		return fmt.Errorf("peat DeleteDocument(%s/%s): %w", datasetsCollection, key, err)
+	}
+	return nil
+}
+
 func (s *PeatStore) ListDatasets(ctx context.Context) ([]Dataset, error) {
 	ids, err := s.listIDs(ctx, datasetsCollection)
 	if err != nil {

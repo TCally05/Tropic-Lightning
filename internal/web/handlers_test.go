@@ -1588,14 +1588,27 @@ func TestViewAsPersonaInCatalog(t *testing.T) {
 	crec := httptest.NewRecorder()
 	h.ServeHTTP(crec, creq)
 	body := crec.Body.String()
-	if !strings.Contains(body, "Viewing as") || !strings.Contains(body, "s4") {
-		t.Error("catalog should show the 'Viewing as s4' persona banner")
+	if !strings.Contains(body, "Impersonating") || !strings.Contains(body, "s4") {
+		t.Error("catalog should show the 'Impersonating s4' banner")
 	}
-	if !strings.Contains(body, "subscribed to 1 of") {
+	if !strings.Contains(body, "to 1 of") {
 		t.Errorf("catalog should reflect s4's subscriptions (1), not the admin's (0)")
 	}
-	if strings.Contains(body, "/catalog/ds_roster/subscribe") {
-		t.Error("preview should be read-only (no subscribe buttons)")
+	// Impersonating: actions apply to s4. Unsubscribing here removes s4 (not admin).
+	ureq := httptest.NewRequest(http.MethodPost, "/catalog/ds_roster/unsubscribe", nil)
+	ureq.Header.Set("Authorization", "Bearer "+admin)
+	ureq.AddCookie(cookie)
+	h.ServeHTTP(httptest.NewRecorder(), ureq)
+	if ops.IsAssigned(ctx, "ds_roster", "s4") {
+		t.Error("unsubscribing while impersonating should remove s4's subscription")
+	}
+	// Re-subscribe while impersonating re-adds s4 (not the admin).
+	sreq := httptest.NewRequest(http.MethodPost, "/catalog/ds_roster/subscribe", nil)
+	sreq.Header.Set("Authorization", "Bearer "+admin)
+	sreq.AddCookie(cookie)
+	h.ServeHTTP(httptest.NewRecorder(), sreq)
+	if !ops.IsAssigned(ctx, "ds_roster", "s4") || ops.IsAssigned(ctx, "ds_roster", "alice") {
+		t.Error("subscribing while impersonating should add s4, not the admin")
 	}
 
 	// Exiting (view=admin) clears the persona cookie.
@@ -1612,5 +1625,56 @@ func TestViewAsPersonaInCatalog(t *testing.T) {
 	}
 	if !cleared {
 		t.Error("view=admin should clear the persona cookie")
+	}
+}
+
+// TestCombineDeleteRemovesFromCatalog guards the bug where deleting a combined
+// source left its catalog/registry entry behind (so it "couldn't be deleted").
+func TestCombineDeleteRemovesFromCatalog(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	_ = dstore.PutMeta(ctx, "ds_a", "A", []string{"base", "x"})
+	_ = dstore.PutRow(ctx, "ds_a", "r1", map[string]string{"base": "Hill", "x": "1"})
+	_ = dstore.PutMeta(ctx, "ds_b", "B", []string{"base", "y"})
+	_ = dstore.PutRow(ctx, "ds_b", "r1", map[string]string{"base": "Hill", "y": "2"})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_a", "A", operators.KindGeneric, "ds_a")
+	_ = ops.RegisterDataset(ctx, "ds_b", "B", operators.KindGeneric, "ds_b")
+	cmb := combine.NewService(combine.NewMemoryStore(), dsvc)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, cmb)
+	h := srv.Routes()
+	tok := adminToken(t, kc)
+	post := func(target string) {
+		r := httptest.NewRequest(http.MethodPost, target, nil)
+		r.Header.Set("Authorization", "Bearer "+tok)
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	catalog := func() string {
+		r := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+		r.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Body.String()
+	}
+
+	form := url.Values{"name": {"AB"}, "left": {"ds_a"}, "left_key": {"base"}, "right": {"ds_b"}, "right_key": {"base"}}
+	cr := httptest.NewRequest(http.MethodPost, "/combine", strings.NewReader(form.Encode()))
+	cr.Header.Set("Authorization", "Bearer "+tok)
+	cr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeHTTP(httptest.NewRecorder(), cr)
+	if !strings.Contains(catalog(), "cmb_ab") {
+		t.Fatal("combined source should appear in the catalog after create")
+	}
+	// Delete it — it must disappear from the catalog (registry entry removed too).
+	post("/combine/cmb_ab/delete")
+	if strings.Contains(catalog(), "cmb_ab") {
+		t.Error("combined source should be gone from the catalog after delete")
+	}
+	if _, ok, _ := cmb.Get(ctx, "cmb_ab"); ok {
+		t.Error("combined spec should be deleted")
 	}
 }

@@ -753,7 +753,7 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	owner := s.operatorName(claimsOf(r))
+	owner := s.effectiveUser(r)
 	qry := r.URL.Query()
 	col := qry.Get("col")
 	val := qry.Get("val")
@@ -941,7 +941,7 @@ func (s *Server) handleViewSave(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	v := views.View{
-		Owner:      s.operatorName(claimsOf(r)),
+		Owner:      s.effectiveUser(r),
 		Collection: collection,
 		Name:       r.PostFormValue("name"),
 		Default:    r.PostFormValue("default") == "on",
@@ -970,7 +970,7 @@ func (s *Server) handleViewDelete(w http.ResponseWriter, r *http.Request) {
 		s.forbidden(w, r)
 		return
 	}
-	if err := s.views.Delete(r.Context(), s.operatorName(claimsOf(r)), r.PathValue("id")); err != nil && !errors.Is(err, views.ErrNotFound) {
+	if err := s.views.Delete(r.Context(), s.effectiveUser(r), r.PathValue("id")); err != nil && !errors.Is(err, views.ErrNotFound) {
 		http.Redirect(w, r, "/datasets/"+collection+"?view=none&error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
@@ -986,7 +986,7 @@ func (s *Server) handleViewSetDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	owner := s.operatorName(claimsOf(r))
+	owner := s.effectiveUser(r)
 	id := r.PathValue("id")
 	var err error
 	if r.PostFormValue("default") == "off" {
@@ -1275,9 +1275,11 @@ func (s *Server) operatorName(claims *auth.Claims) string {
 	return firstNonEmpty(claims.PreferredUsername, claims.Subject)
 }
 
-// previewUser returns the identity to render "as": the admin's active "viewing
-// as" persona (from the view_as cookie) when set, otherwise the caller's own
-// username. persona is true when previewing someone else.
+// previewUser returns the identity to act "as": the admin's active "viewing as"
+// persona (from the view_as cookie) when set, otherwise the caller's own
+// username. persona is true when impersonating someone else. While a persona is
+// active, the admin impersonates that user — per-user actions (subscribe, saved
+// views, combine ownership) apply to them, not to the admin.
 func (s *Server) previewUser(r *http.Request) (user string, persona bool) {
 	claims, _ := auth.ClaimsFromContext(r.Context())
 	self := s.operatorName(claims)
@@ -1287,6 +1289,13 @@ func (s *Server) previewUser(r *http.Request) (user string, persona bool) {
 		}
 	}
 	return self, false
+}
+
+// effectiveUser is the identity per-user actions apply to: the impersonated
+// persona when active, else the caller.
+func (s *Server) effectiveUser(r *http.Request) string {
+	u, _ := s.previewUser(r)
+	return u
 }
 
 // canAccessDataset is true for admins, or operators the dataset is assigned to.
@@ -1423,7 +1432,7 @@ func (s *Server) handleCatalogPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
-	me := s.operatorName(claimsOf(r))
+	me := s.effectiveUser(r)
 	if me == "" {
 		s.forbidden(w, r)
 		return
@@ -1436,7 +1445,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
-	me := s.operatorName(claimsOf(r))
+	me := s.effectiveUser(r)
 	if me == "" {
 		s.forbidden(w, r)
 		return
@@ -1504,7 +1513,7 @@ func (s *Server) handleCombineCreate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/combine/new?error="+url.QueryEscape("invalid form"), http.StatusSeeOther)
 		return
 	}
-	me := s.operatorName(claimsOf(r))
+	me := s.effectiveUser(r)
 	c, err := s.combine.Create(r.Context(), combine.Input{
 		Name:  r.PostFormValue("name"),
 		Owner: me,
@@ -1535,10 +1544,13 @@ func (s *Server) handleCombineDelete(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/catalog?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
+	// Also drop the catalog/registry entry (and its subscriptions); otherwise the
+	// combined source keeps showing after its spec is gone.
+	if err := s.operators.DeleteDataset(r.Context(), key); err != nil {
+		slog.Warn("delete combined registry entry", "key", key, "err", err)
+	}
 	http.Redirect(w, r, "/catalog", http.StatusSeeOther)
 }
-
-// --- pilots dataset (admin only) ---
 
 // pilotsDisplayLimit caps how many rows the HTML table renders (the full set is
 // still ingested and available via /api/pilots).
