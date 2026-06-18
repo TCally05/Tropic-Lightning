@@ -871,3 +871,38 @@ func TestOperatorCanEditAssignedDataset(t *testing.T) {
 		t.Errorf("unassigned edit = %d, want 403", rec.Code)
 	}
 }
+
+func TestOperatorUpdatesExistingRow(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	_ = dstore.PutMeta(ctx, "ds_roster", "Roster", []string{"name", "status"})
+	_ = dstore.PutRow(ctx, "ds_roster", "r000001", map[string]string{"name": "Alice", "status": ""})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
+	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops)
+	h := srv.Routes()
+
+	tok := kc.SignToken(t, map[string]any{"preferred_username": "s4", "realm_access": map[string]any{"roles": []string{"user"}}})
+	form := url.Values{"id": {"r000001"}, "f_name": {"Alice"}, "f_status": {"grounded"}}
+	req := httptest.NewRequest(http.MethodPost, "/datasets/ds_roster/rows/update?edit=1", strings.NewReader(form.Encode()))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("update = %d", rec.Code)
+	}
+	// Redirect preserves edit mode.
+	if loc := rec.Header().Get("Location"); !strings.Contains(loc, "edit=1") {
+		t.Errorf("redirect %q should preserve edit mode", loc)
+	}
+	got, _ := dstore.ListRows(ctx, "ds_roster")
+	if got[0].Fields["status"] != "grounded" {
+		t.Errorf("row not updated: %+v", got[0].Fields)
+	}
+}

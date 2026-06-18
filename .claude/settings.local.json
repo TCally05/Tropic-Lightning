@@ -89,7 +89,9 @@
       "Bash(perl -0pi -e 's/web\\\\.NewServer\\\\\\(kc\\\\.Authenticator\\\\\\(t\\\\\\), kc\\\\.Config\\\\\\(\\\\\\), ds, pl, dataset\\\\.NewService\\\\\\(dataset\\\\.NewMemoryStore\\\\\\(\\\\\\), ds, nil\\\\\\)\\\\\\)/web.NewServer\\(kc.Authenticator\\(t\\), kc.Config\\(\\), ds, pl, dataset.NewService\\(dataset.NewMemoryStore\\(\\), ds, nil\\), operators.NewService\\(operators.NewMemoryStore\\(\\)\\)\\)/g' internal/web/handlers_test.go)",
       "Bash(perl -0pi -e 's/web\\\\.NewServer\\\\\\(kc\\\\.Authenticator\\\\\\(t\\\\\\), kc\\\\.Config\\\\\\(\\\\\\), ds, pilots\\\\.NewService\\\\\\(pstore, ds, nil\\\\\\), dataset\\\\.NewService\\\\\\(dataset\\\\.NewMemoryStore\\\\\\(\\\\\\), ds, nil\\\\\\)\\\\\\)/web.NewServer\\(kc.Authenticator\\(t\\), kc.Config\\(\\), ds, pilots.NewService\\(pstore, ds, nil\\), dataset.NewService\\(dataset.NewMemoryStore\\(\\), ds, nil\\), operators.NewService\\(operators.NewMemoryStore\\(\\)\\)\\)/g' internal/web/handlers_test.go)",
       "Bash(gofmt -w internal/web/)",
-      "Bash(perl -0pi -e 's/\\\\t\\\\/\\\\/ And it.s now in the registry\\\\.\\\\n\\\\tif _, err := ops\\\\.GetDataset; false \\\\{\\\\n\\\\t\\\\t_ = err\\\\n\\\\t\\\\}\\\\n//' internal/web/handlers_test.go)"
+      "Bash(perl -0pi -e 's/\\\\t\\\\/\\\\/ And it.s now in the registry\\\\.\\\\n\\\\tif _, err := ops\\\\.GetDataset; false \\\\{\\\\n\\\\t\\\\t_ = err\\\\n\\\\t\\\\}\\\\n//' internal/web/handlers_test.go)",
+      "Bash(gofmt -w internal/web/handlers.go internal/dataset/)",
+      "Bash(gofmt -w internal/web/ internal/dataset/)"
     ]
   }
 }

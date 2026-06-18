@@ -118,6 +118,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /datasets/{collection}/columns/add", authed(s.handleDatasetAddColumn))
 	mux.Handle("POST /datasets/{collection}/columns/delete", authed(s.handleDatasetDeleteColumn))
 	mux.Handle("POST /datasets/{collection}/rows/add", authed(s.handleDatasetAddRow))
+	mux.Handle("POST /datasets/{collection}/rows/update", authed(s.handleDatasetUpdateRow))
 	mux.Handle("POST /datasets/{collection}/rows/delete", authed(s.handleDatasetDeleteRow))
 	mux.Handle("GET /missions", authed(s.handleMissions))
 	mux.Handle("POST /pilots/{id}/status", authed(s.handlePilotStatus))
@@ -550,8 +551,11 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		"FilterVal":    val,
 		"FilterQuery":  q,
 		"FilterActive": (col != "" && val != "") || q != "",
+		"EditMode":     r.URL.Query().Get("edit") == "1",
+		"BackQuery":    r.URL.RawQuery, // preserve filter+edit on edit actions
 		"Imported":     r.URL.Query().Get("imported"),
 		"Capped":       r.URL.Query().Get("capped"),
+		"Error":        r.URL.Query().Get("error"),
 	})
 }
 
@@ -564,13 +568,24 @@ func (s *Server) datasetEdit(w http.ResponseWriter, r *http.Request, fn func(ctx
 		s.forbidden(w, r)
 		return
 	}
+	// Preserve the current view (edit mode + filter) carried in the action query.
 	dest := "/datasets/" + collection
+	if r.URL.RawQuery != "" {
+		dest += "?" + r.URL.RawQuery
+	}
+	back := func(errMsg string) {
+		sep := "?"
+		if r.URL.RawQuery != "" {
+			sep = "&"
+		}
+		http.Redirect(w, r, dest+sep+"error="+url.QueryEscape(errMsg), http.StatusSeeOther)
+	}
 	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, dest+"?error="+url.QueryEscape("invalid form"), http.StatusSeeOther)
+		back("invalid form")
 		return
 	}
 	if err := fn(r.Context(), collection); err != nil {
-		http.Redirect(w, r, dest+"?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		back(err.Error())
 		return
 	}
 	http.Redirect(w, r, dest, http.StatusSeeOther)
@@ -598,6 +613,18 @@ func (s *Server) handleDatasetAddRow(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return s.datasets.AddRow(ctx, c, values)
+	})
+}
+
+func (s *Server) handleDatasetUpdateRow(w http.ResponseWriter, r *http.Request) {
+	s.datasetEdit(w, r, func(ctx context.Context, c string) error {
+		values := map[string]string{}
+		for k, v := range r.PostForm {
+			if name, ok := strings.CutPrefix(k, "f_"); ok && len(v) > 0 {
+				values[name] = v[0]
+			}
+		}
+		return s.datasets.UpdateRow(ctx, c, r.PostFormValue("id"), values)
 	})
 }
 
