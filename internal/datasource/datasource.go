@@ -45,8 +45,9 @@ type StatusProvider interface {
 	Status(ctx context.Context) (MeshStatus, error)
 }
 
-// KnownTypes are the connection types offered in the UI. "other" is a catch-all.
-var KnownTypes = []string{"postgres", "mysql", "s3", "http", "mqtt", "kafka", "file", "other"}
+// KnownTypes are the connection types offered in the UI. "file", "http", and
+// "weather" are produced by their dedicated connectors; "other" is a catch-all.
+var KnownTypes = []string{"postgres", "mysql", "s3", "http", "weather", "mqtt", "kafka", "file", "other"}
 
 // ValidationError is a user-facing input error (maps to HTTP 400).
 type ValidationError struct{ Msg string }

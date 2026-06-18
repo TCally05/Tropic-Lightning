@@ -1,202 +1,215 @@
-{{define "datasources.html"}}<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Data Sources · Keycloak Portal</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 860px; margin: 3rem auto; padding: 0 1rem; color: #1a1a2e; }
-    .card { border: 1px solid #e0e0e0; border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 1.5rem; }
-    h1 { margin-top: 0; }
-    label { display: block; font-weight: 600; margin: .8rem 0 .25rem; font-size: .9rem; }
-    input[type=text], select { width: 100%; padding: .55rem; border: 1px solid #ccc; border-radius: 8px; font: inherit; box-sizing: border-box; }
-    .row { display: flex; gap: 1rem; }
-    .row > div { flex: 1; }
-    .btn { display: inline-block; background: #4636f5; color: #fff; border: none; padding: .6rem 1.2rem; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; margin-top: 1rem; }
-    .btn.link { background: #fff; color: #4636f5; border: 1px solid #4636f5; }
-    .btn.danger { background: #fff; color: #d63031; border: 1px solid #d63031; padding: .3rem .7rem; margin: 0; font-size: .85rem; }
-    table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
-    th, td { text-align: left; padding: .5rem; border-bottom: 1px solid #eee; font-size: .9rem; }
-    .pill { display: inline-block; padding: .15rem .6rem; border-radius: 999px; font-size: .75rem; font-weight: 700; }
-    .banner { padding: .6rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
-    .connected { background: #e6f7ed; color: #1c7a44; }
-    .disconnected { background: #fff6e0; color: #946200; }
-    .err { background: #fff0f0; color: #d63031; padding: .6rem 1rem; border-radius: 8px; }
-    .ok { background: #e6f7ed; color: #1c7a44; padding: .6rem 1rem; border-radius: 8px; }
-    .muted { color: #777; }
-    code { background: #f4f4f8; padding: .1rem .35rem; border-radius: 4px; font-size: .85rem; }
-  </style>
-</head>
-<body>
-  <p><a href="/dashboard">← Dashboard</a></p>
-  <h1>Data Sources</h1>
+{{define "datasources.html"}}
+<div class="page-head">
+  <h1>Data sources</h1>
+  <p class="muted">Add a source below — pick a type and only that form appears. Live sources cache into the peat mesh and stay available offline.</p>
+</div>
 
-  {{if .MeshReachable}}
-    {{if .Mesh.SyncActive}}
-      <p class="banner connected">● Connected to the peat mesh — node <code>{{.Mesh.NodeID}}</code>, {{.Mesh.ConnectedPeers}} peer(s). Records sync automatically.</p>
-    {{else}}
-      <p class="banner disconnected">● Operating disconnected — peat node <code>{{.Mesh.NodeID}}</code> is up but not syncing ({{.Mesh.ConnectedPeers}} peers). Records are stored locally and will reconcile when the mesh reconnects.</p>
-    {{end}}
-  {{else}}
-    <p class="banner disconnected">● peat node unreachable — changes can't be saved until it's available.</p>
-  {{end}}
+{{if .Error}}<div class="banner err">{{.Error}}</div>{{end}}
+{{if .Created}}<div class="banner ok">Data source added.</div>{{end}}
 
-  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-  {{if .Created}}<p class="ok">Data source added.</p>{{end}}
-
-  <div class="card">
-    <h2>Add a data source</h2>
-    <form method="POST" action="/datasources">
-      <label for="name">Name</label>
-      <input type="text" id="name" name="name" placeholder="Production telemetry DB" required>
-
-      <div class="row">
-        <div>
-          <label for="type">Type</label>
-          <select id="type" name="type">
-            {{range .KnownTypes}}<option value="{{.}}">{{.}}</option>{{end}}
-          </select>
-        </div>
-        <div>
-          <label for="secret_ref">Secret reference <span class="muted">(optional)</span></label>
-          <input type="text" id="secret_ref" name="secret_ref" placeholder="k8s-secret/telemetry-db">
-        </div>
-      </div>
-
-      <label for="endpoint">Endpoint</label>
-      <input type="text" id="endpoint" name="endpoint" placeholder="postgres://host:5432/telemetry" required>
-
-      <label style="font-weight:400;"><input type="checkbox" name="enabled" checked> Enabled</label>
-
-      <button class="btn" type="submit">Add data source</button>
-    </form>
-    <p class="muted" style="margin-top:1rem;">Credentials are never stored here — use <code>secret_ref</code> to point at where they live.</p>
+<div class="card">
+  <div class="field" style="max-width:380px;">
+    <label for="kind">What do you want to add?</label>
+    <select id="kind" onchange="showKind(this.value)">
+      <option value="">— choose a source type —</option>
+      <option value="file">📄 File upload (CSV / XLSX)</option>
+      {{if .WeatherEnabled}}<option value="weather">🌤 Live weather (Open-Meteo)</option>{{end}}
+      {{if .HTTPEnabled}}<option value="http">🔗 Live API (HTTP / JSON)</option>{{end}}
+      <option value="connection">🗄 External connection (Postgres, S3, …)</option>
+    </select>
   </div>
 
-  <div class="card">
-    <h2>Upload a file</h2>
-    <p>Drag in a CSV/XLSX, preview it, drop unwanted columns, and ingest it as a dataset.</p>
-    <a class="btn" href="/datasources/upload">Add file (upload) →</a>
-  </div>
+  <!-- FILE UPLOAD -->
+  <section data-kind="file" hidden>
+    <hr style="border:none; border-top:1px solid var(--border); margin:.25rem 0 1.25rem;">
+    <div id="errbox"></div>
+    <div id="drop" style="border:2px dashed var(--border-strong); border-radius:var(--radius); padding:2.25rem; text-align:center; color:var(--muted); cursor:pointer;">
+      <strong>Drop a CSV or XLSX here</strong><br><span class="muted">or click to choose a file</span>
+      <input id="file" type="file" accept=".csv,.xlsx" style="display:none">
+    </div>
+
+    <div id="preview" style="display:none; margin-top:1.25rem;">
+      <form id="importForm" method="POST" action="/datasources/import">
+        <input type="hidden" name="token" id="token">
+        <div class="inline-fields" style="margin-bottom:.5rem;">
+          <div class="field"><label>Dataset name</label><input type="text" name="name" id="name" placeholder="e.g. Hill AFB roster" style="width:18rem;"></div>
+          <div class="field" id="delimWrap" style="display:none;"><label>Delimiter</label><select name="delimiter" id="delimiter" onchange="reparse()" style="width:auto;"></select></div>
+        </div>
+        <p class="muted" style="font-size:.85rem;" id="meta"></p>
+        <p class="muted" style="font-size:.85rem;">If columns look wrong, change the delimiter. Untick a column header to drop it before importing.</p>
+        <div class="table-wrap"><table id="tbl"></table></div>
+        <div style="margin-top:1rem; display:flex; gap:.6rem;">
+          <button class="btn" type="submit">Add to application</button>
+          <button class="btn subtle" type="button" onclick="resetUpload()">Reset</button>
+        </div>
+      </form>
+    </div>
+  </section>
 
   {{if .WeatherEnabled}}
-  <div class="card">
-    <h2>Add a live weather source</h2>
-    <p class="muted">Pulls <strong>current conditions</strong> from <code>open-meteo.com</code> for each location into a dataset you can assign and visualize. The node refreshes it in the background when connected; operators see the last-synced reading while disconnected.</p>
+  <!-- WEATHER -->
+  <section data-kind="weather" hidden>
+    <hr style="border:none; border-top:1px solid var(--border); margin:.25rem 0 1.25rem;">
+    <p class="muted" style="font-size:.88rem;">Pulls <strong>current conditions</strong> from <code>open-meteo.com</code> for each location. Refreshes in the background when connected.</p>
     <form method="POST" action="/datasources/weather">
-      <label for="wxname">Name</label>
-      <input type="text" id="wxname" name="name" placeholder="AOR weather" required>
-
-      <label for="locations">Locations <span class="muted">— one per line: <code>label, latitude, longitude</code></span></label>
-      <textarea id="locations" name="locations" rows="4" required
-        style="width:100%; padding:.55rem; border:1px solid #ccc; border-radius:8px; font:inherit; box-sizing:border-box;"
-        placeholder="Hill AFB, 41.124, -111.973&#10;Ramstein AB, 49.437, 7.600&#10;Kadena AB, 26.356, 127.769"></textarea>
-
+      <div class="field"><label>Name</label><input type="text" name="name" placeholder="AOR weather" required></div>
+      <div class="field"><label>Locations <span class="muted">— one per line: <code>label, latitude, longitude</code></span></label>
+        <textarea name="locations" rows="4" required placeholder="Hill AFB, 41.124, -111.973&#10;Ramstein AB, 49.437, 7.600&#10;Kadena AB, 26.356, 127.769"></textarea>
+      </div>
       <button class="btn" type="submit">Add weather source</button>
     </form>
-    {{if .WeatherConnectors}}
-    <table style="margin-top:1rem;">
-      <thead><tr><th>Name</th><th>Locations</th><th></th></tr></thead>
-      <tbody>
-        {{range .WeatherConnectors}}
-        <tr>
-          <td>{{.Name}}</td>
-          <td>{{len .Locations}}</td>
-          <td><a class="btn" href="/datasets/{{.Collection}}">View →</a></td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-    {{end}}
-  </div>
+  </section>
   {{end}}
 
   {{if .HTTPEnabled}}
-  <div class="card">
-    <h2>Add a live API (HTTP/JSON) source</h2>
-    <p class="muted">Pulls records from any JSON HTTP endpoint into a dataset you can assign and visualize. The node refreshes it in the background when connected, and you can <strong>Refresh now</strong> from the dataset view.</p>
+  <!-- HTTP / JSON -->
+  <section data-kind="http" hidden>
+    <hr style="border:none; border-top:1px solid var(--border); margin:.25rem 0 1.25rem;">
+    <p class="muted" style="font-size:.88rem;">Pulls records from any JSON HTTP endpoint. Refreshes in the background when connected; <strong>Refresh now</strong> is available on the dataset view.</p>
     <form method="POST" action="/datasources/http">
-      <label for="apiname">Name</label>
-      <input type="text" id="apiname" name="name" placeholder="Asset tracker API" required>
-
-      <label for="url">URL</label>
-      <input type="text" id="url" name="url" placeholder="https://api.example.com/v1/assets" required>
-
-      <label for="record_path">Record path <span class="muted">(optional)</span></label>
-      <input type="text" id="record_path" name="record_path" placeholder="data.items — leave blank if the response is itself an array">
-
-      <div class="row">
-        <div>
-          <label for="auth_type">Auth</label>
-          <select id="auth_type" name="auth_type" onchange="onAuthChange()">
+      <div class="field"><label>Name</label><input type="text" name="name" placeholder="Asset tracker API" required></div>
+      <div class="field"><label>URL</label><input type="url" name="url" placeholder="https://api.example.com/v1/assets" required></div>
+      <div class="field"><label>Record path <span class="muted">(optional — dot-path to the array, e.g. <code>data.items</code>; blank if the response is itself an array)</span></label><input type="text" name="record_path" placeholder="data.items"></div>
+      <div class="inline-fields">
+        <div class="field"><label>Auth</label>
+          <select name="auth_type" id="auth_type" onchange="onAuthChange()" style="width:auto;">
             {{range .HTTPAuthTypes}}<option value="{{.}}">{{.}}</option>{{end}}
           </select>
         </div>
-        <div id="headerNameWrap" style="display:none;">
-          <label for="header_name">Header name</label>
-          <input type="text" id="header_name" name="header_name" placeholder="X-API-Key">
-        </div>
+        <div class="field" id="headerNameWrap" style="display:none;"><label>Header name</label><input type="text" name="header_name" placeholder="X-API-Key"></div>
       </div>
-
-      <div id="authValueWrap" style="display:none;">
-        <label for="auth_value">Key / token</label>
-        <input type="text" id="auth_value" name="auth_value" placeholder="value sent on each request" autocomplete="off">
-        <p class="muted" style="margin:.25rem 0 0; font-size:.8rem;">⚠ Stored in the peat mesh with the connector config. Use a least-privilege, read-only credential.</p>
+      <div class="field" id="authValueWrap" style="display:none;"><label>Key / token</label><input type="text" name="auth_value" autocomplete="off" placeholder="value sent on each request">
+        <p class="muted" style="font-size:.8rem; margin:.25rem 0 0;">⚠ Stored in the peat mesh with the connector config. Use a least-privilege, read-only credential.</p>
       </div>
-
       <button class="btn" type="submit">Add API source</button>
     </form>
-    {{if .HTTPConnectors}}
-    <table style="margin-top:1rem;">
-      <thead><tr><th>Name</th><th>URL</th><th>Auth</th><th></th></tr></thead>
-      <tbody>
-        {{range .HTTPConnectors}}
-        <tr>
-          <td>{{.Name}}</td>
-          <td><code>{{.URL}}</code></td>
-          <td>{{.AuthType}}</td>
-          <td><a class="btn" href="/datasets/{{.Collection}}">View →</a></td>
-        </tr>
-        {{end}}
-      </tbody>
-    </table>
-    {{end}}
-  </div>
-  <script>
-    function onAuthChange(){
-      var t = document.getElementById('auth_type').value;
-      document.getElementById('headerNameWrap').style.display = (t === 'header') ? '' : 'none';
-      document.getElementById('authValueWrap').style.display = (t === 'none') ? 'none' : '';
-    }
-    onAuthChange();
-  </script>
+  </section>
   {{end}}
 
-  <div class="card">
-    <h2>Configured sources</h2>
-    {{if .Sources}}
+  <!-- GENERIC CONNECTION -->
+  <section data-kind="connection" hidden>
+    <hr style="border:none; border-top:1px solid var(--border); margin:.25rem 0 1.25rem;">
+    <p class="muted" style="font-size:.88rem;">Record an external system connection (metadata only — credentials live elsewhere via <code>secret_ref</code>).</p>
+    <form method="POST" action="/datasources">
+      <div class="field"><label>Name</label><input type="text" name="name" placeholder="Production telemetry DB" required></div>
+      <div class="inline-fields" style="margin-bottom:.9rem;">
+        <div class="field"><label>Type</label>
+          <select name="type" style="width:auto;">
+            {{range .KnownTypes}}{{if and (ne . "file") (ne . "http") (ne . "weather")}}<option value="{{.}}">{{.}}</option>{{end}}{{end}}
+          </select>
+        </div>
+        <div class="field" style="flex:1;"><label>Secret reference <span class="muted">(optional)</span></label><input type="text" name="secret_ref" placeholder="k8s-secret/telemetry-db"></div>
+      </div>
+      <div class="field"><label>Endpoint</label><input type="text" name="endpoint" placeholder="postgres://host:5432/telemetry" required></div>
+      <label class="check" style="margin-bottom:.9rem;"><input type="checkbox" name="enabled" checked> Enabled</label><br>
+      <button class="btn" type="submit">Add connection</button>
+    </form>
+  </section>
+</div>
+
+<div class="card">
+  <h2>Configured sources</h2>
+  {{if .Sources}}
+  <div class="table-wrap">
     <table>
       <thead><tr><th>Name</th><th>Type</th><th>Endpoint</th><th>Enabled</th><th></th></tr></thead>
       <tbody>
         {{range .Sources}}
         <tr>
-          <td>{{.Name}}</td>
-          <td><code>{{.Type}}</code></td>
-          <td>{{.Endpoint}}</td>
-          <td>{{if .Enabled}}yes{{else}}no{{end}}</td>
-          <td>
-            {{if hasPrefix .Endpoint "dataset://"}}<a class="btn" href="/datasets/{{trimPrefix .Endpoint "dataset://"}}">View rows</a>{{end}}
-            <form method="POST" action="/datasources/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?');" style="display:inline;">
-              <button class="btn danger" type="submit">Delete</button>
-            </form>
+          <td><strong>{{.Name}}</strong></td>
+          <td><span class="pill gray">{{.Type}}</span></td>
+          <td class="muted">{{.Endpoint}}</td>
+          <td>{{if .Enabled}}<span class="pill green">yes</span>{{else}}<span class="pill gray">no</span>{{end}}</td>
+          <td style="text-align:right;">
+            <div style="display:inline-flex; gap:.4rem;">
+              {{if hasPrefix .Endpoint "dataset://"}}<a class="btn sm ghost" href="/datasets/{{trimPrefix .Endpoint "dataset://"}}">View</a>{{end}}
+              <form method="POST" action="/datasources/{{.ID}}/delete" onsubmit="return confirm('Delete {{.Name}}?');" style="display:inline;">
+                <button class="btn sm danger" type="submit">Delete</button>
+              </form>
+            </div>
           </td>
         </tr>
         {{end}}
       </tbody>
     </table>
-    {{else}}
-      <p class="muted">No data sources yet. Add one above.</p>
-    {{end}}
   </div>
-</body>
-</html>{{end}}
+  {{else}}
+    <div class="empty">No data sources yet. Add one above.</div>
+  {{end}}
+</div>
+
+<script>
+  function showKind(kind){
+    document.querySelectorAll('section[data-kind]').forEach(function(s){ s.hidden = (s.getAttribute('data-kind') !== kind); });
+  }
+  // Preselect from #hash (e.g. /datasources#file from the old upload link).
+  (function(){
+    var h = (location.hash || '').replace('#','');
+    if (h && document.querySelector('select#kind option[value="'+h+'"]')) {
+      document.getElementById('kind').value = h; showKind(h);
+    }
+  })();
+
+  // --- HTTP auth fields ---
+  function onAuthChange(){
+    var sel = document.getElementById('auth_type'); if(!sel) return;
+    var t = sel.value;
+    document.getElementById('headerNameWrap').style.display = (t === 'header') ? '' : 'none';
+    document.getElementById('authValueWrap').style.display = (t === 'none') ? 'none' : '';
+  }
+  if (document.getElementById('auth_type')) onAuthChange();
+
+  // --- File upload + preview ---
+  var drop = document.getElementById('drop'), fileInput = document.getElementById('file'), errbox = document.getElementById('errbox');
+  function showError(m){ errbox.innerHTML = '<div class="banner err">'+escapeHtml(m)+'</div>'; }
+  function clearError(){ errbox.innerHTML=''; }
+  function escapeHtml(s){ var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+  if (drop){
+    drop.addEventListener('click', function(){ fileInput.click(); });
+    ['dragenter','dragover'].forEach(function(e){ drop.addEventListener(e, function(ev){ ev.preventDefault(); drop.style.background='var(--accent-weak)'; drop.style.borderColor='var(--accent)'; }); });
+    ['dragleave','drop'].forEach(function(e){ drop.addEventListener(e, function(ev){ ev.preventDefault(); drop.style.background=''; drop.style.borderColor=''; }); });
+    drop.addEventListener('drop', function(ev){ if (ev.dataTransfer.files.length) upload(ev.dataTransfer.files[0]); });
+    fileInput.addEventListener('change', function(){ if (fileInput.files.length) upload(fileInput.files[0]); });
+  }
+  async function upload(file){
+    clearError();
+    var fd = new FormData(); fd.append('file', file);
+    try {
+      var r = await fetch('/datasources/upload', { method:'POST', body: fd });
+      var d = await r.json();
+      if (!r.ok){ showError(d.error || ('upload failed ('+r.status+')')); return; }
+      renderPreview(d);
+    } catch(e){ showError('upload failed: '+e); }
+  }
+  async function reparse(){
+    clearError();
+    var token = document.getElementById('token').value, delim = document.getElementById('delimiter').value;
+    try {
+      var r = await fetch('/datasources/preview', { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'token='+encodeURIComponent(token)+'&delimiter='+encodeURIComponent(delim) });
+      var d = await r.json();
+      if (!r.ok){ showError(d.error || ('preview failed ('+r.status+')')); return; }
+      renderPreview(d);
+    } catch(e){ showError('preview failed: '+e); }
+  }
+  function renderPreview(d){
+    document.getElementById('token').value = d.token;
+    if (!document.getElementById('name').value) document.getElementById('name').value = (d.filename||'dataset').replace(/\.[^.]+$/,'');
+    document.getElementById('meta').textContent = d.filename + ' — ' + d.columns.length + ' columns, ' + d.total + ' rows (showing ' + d.rows.length + ').';
+    var delimWrap = document.getElementById('delimWrap'), delimSel = document.getElementById('delimiter');
+    if (d.delimiter && d.delimiterOptions){
+      if (!delimSel.options.length) d.delimiterOptions.forEach(function(n){ var o=document.createElement('option'); o.value=n; o.textContent=n; delimSel.appendChild(o); });
+      delimSel.value = d.delimiter; delimWrap.style.display='';
+      if (d.columns.length <= 1) document.getElementById('meta').textContent += '  ⚠ only one column detected — try a different delimiter.';
+    } else { delimWrap.style.display='none'; }
+    var thead = '<thead><tr>';
+    d.columns.forEach(function(c,i){ thead += '<th data-col="'+i+'"><label class="check"><input type="checkbox" name="col" value="'+escapeHtml(c)+'" checked onchange="toggleCol('+i+',this.checked)">'+escapeHtml(c)+'</label></th>'; });
+    thead += '</tr></thead><tbody>';
+    var tbody = '';
+    d.rows.forEach(function(row){ tbody += '<tr>'; d.columns.forEach(function(_,i){ tbody += '<td data-col="'+i+'">'+escapeHtml(row[i]!=null?row[i]:'')+'</td>'; }); tbody += '</tr>'; });
+    document.getElementById('tbl').innerHTML = thead + tbody + '</tbody>';
+    document.getElementById('preview').style.display='block';
+  }
+  function toggleCol(i, keep){ document.querySelectorAll('[data-col="'+i+'"]').forEach(function(el){ el.style.opacity = keep ? '' : '.35'; el.style.textDecoration = keep ? '' : 'line-through'; }); }
+  function resetUpload(){ document.getElementById('preview').style.display='none'; document.getElementById('tbl').innerHTML=''; document.getElementById('token').value=''; document.getElementById('name').value=''; clearError(); }
+</script>
+{{end}}

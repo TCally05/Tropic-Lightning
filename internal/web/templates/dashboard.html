@@ -1,156 +1,83 @@
-{{define "dashboard.html"}}<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dashboard · Keycloak Portal</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 4rem auto; padding: 0 1rem; color: #1a1a2e; }
-    .card { border: 1px solid #e0e0e0; border-radius: 12px; padding: 2rem; margin-bottom: 1.5rem; }
-    .pill { display: inline-block; background: #eef0ff; color: #4636f5; padding: .25rem .7rem; border-radius: 999px; margin: .15rem; font-size: .85rem; font-weight: 600; }
-    .admin { background: #fff0f0; color: #d63031; padding: .5rem 1rem; border-radius: 8px; }
-    .muted { color: #777; }
-    .btn { display: inline-block; background: #fff; color: #4636f5; border: 1px solid #4636f5; padding: .5rem 1rem; border-radius: 8px; text-decoration: none; cursor: pointer; font: inherit; }
-    .btn.active { background: #4636f5; color: #fff; }
-    h1 { margin-top: 0; }
-    code { background: #f4f4f8; padding: .1rem .35rem; border-radius: 4px; }
-    .status { display: inline-flex; align-items: center; gap: .5rem; font-weight: 600; }
-    .dot { width: .8rem; height: .8rem; border-radius: 50%; display: inline-block; flex: none; box-shadow: 0 0 0 3px rgba(0,0,0,.04); }
-    .dot.green { background: #1c9d52; }
-    .dot.red { background: #d63031; }
-    .dot.unknown { background: #b0b0b0; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Welcome, {{.Username}}</h1>
-    {{if .Email}}<p class="muted">{{.Email}}</p>{{end}}
-    {{if .IsAdmin}}<p class="admin">★ You have <strong>admin</strong> access.</p>{{end}}
-    <form method="POST" action="/auth/logout"><button class="btn" type="submit">Sign out</button></form>
-  </div>
+{{define "dashboard.html"}}
+<div class="page-head">
+  <h1>Welcome, {{.Username}}</h1>
+  <p class="muted">{{if .Email}}{{.Email}} · {{end}}{{if .IsAdmin}}<span class="pill red">admin</span>{{else}}<span class="pill gray">operator</span>{{end}}</p>
+</div>
 
-  <div class="card">
-    <h2>peat node</h2>
-    <p class="status">
-      <span id="peat-dot" class="dot {{if .PeatConnected}}green{{else}}red{{end}}"></span>
-      <span id="peat-text">{{if .PeatConnected}}Connected{{else}}Disconnected{{end}}</span>
-    </p>
-    <p id="peat-detail" class="muted">
-      {{- if .PeatConnected}}node <code>{{.Peat.NodeID}}</code> · {{.Peat.ConnectedPeers}} peer(s){{if .Peat.SyncActive}} · syncing{{end}}{{else}}peat node is not reachable{{end -}}
-    </p>
-  </div>
-  <script>
-    async function refreshPeat() {
-      var dot = document.getElementById('peat-dot');
-      var txt = document.getElementById('peat-text');
-      var det = document.getElementById('peat-detail');
-      try {
-        var r = await fetch('/api/peat/status', { headers: { 'Accept': 'application/json' }, cache: 'no-store' });
-        if (!r.ok) throw new Error('status ' + r.status);
-        var d = await r.json();
-        if (d.connected) {
-          dot.className = 'dot green';
-          txt.textContent = 'Connected';
-          det.textContent = 'node ' + (d.node_id || '?') + ' · ' + (d.connected_peers || 0) + ' peer(s)' + (d.sync_active ? ' · syncing' : '');
-        } else {
-          dot.className = 'dot red';
-          txt.textContent = 'Disconnected';
-          det.textContent = 'peat node is not reachable';
-        }
-      } catch (e) {
-        dot.className = 'dot red';
-        txt.textContent = 'Disconnected';
-        det.textContent = 'status check failed';
-      }
-    }
-    setInterval(refreshPeat, 5000);
-  </script>
-
-  {{if .IsAdmin}}
-  <div class="card">
-    <h2>View as</h2>
-    <p class="muted">Preview your admin view, or preview a specific operator's view (their assigned datasets).</p>
-    <a class="btn {{if eq .View "admin"}}active{{end}}" href="/dashboard?view=admin">Admin</a>
-    <form method="GET" action="/dashboard" style="display:inline-block; margin-left:.4rem;">
+{{if .IsAdmin}}
+<div class="card">
+  <div class="toolbar">
+    <h2 style="margin:0;">Viewing as</h2>
+    <span class="spacer"></span>
+    <a class="btn sm {{if eq .View "admin"}}{{else}}ghost{{end}}" href="/dashboard?view=admin">Admin</a>
+    <form method="GET" action="/dashboard" style="display:inline-flex; gap:.4rem; align-items:center;">
       <input type="hidden" name="view" value="operator">
-      <label>Preview operator:
-        <select name="as" onchange="this.form.submit()" style="padding:.4rem; border-radius:6px; border:1px solid #ccc; font:inherit;">
-          <option value="">— choose —</option>
-          {{range .Operators}}<option value="{{.Username}}" {{if and (eq $.View "operator") (eq $.PreviewAs .Username)}}selected{{end}}>{{.Username}}{{if .DisplayName}} ({{.DisplayName}}){{end}}</option>{{end}}
-        </select>
-      </label>
-      <noscript><button class="btn" type="submit">Preview</button></noscript>
+      <select name="as" onchange="this.form.submit()" style="width:auto;">
+        <option value="">Preview operator…</option>
+        {{range .Operators}}<option value="{{.Username}}" {{if and (eq $.View "operator") (eq $.PreviewAs .Username)}}selected{{end}}>{{.Username}}{{if .DisplayName}} ({{.DisplayName}}){{end}}</option>{{end}}
+      </select>
+      <noscript><button class="btn sm" type="submit">Go</button></noscript>
     </form>
   </div>
-  {{end}}
+</div>
+{{end}}
 
-  {{if and .IsAdmin (eq .View "admin")}}
-  <div class="card">
-    <h2>Admin</h2>
-    <p>Manage external system connections, the pilots dataset, and operators.</p>
-    <a class="btn" href="/datasources">Manage data sources →</a>
-    <a class="btn" href="/pilots" style="margin-left:.5rem;">USAF pilots dataset →</a>
-    <a class="btn" href="/operators" style="margin-left:.5rem;">Operators &amp; assignments →</a>
-  </div>
-  {{end}}
+{{if and .IsAdmin (eq .View "admin")}}
+<div class="grid2">
+  <a class="card" href="/datasources" style="color:inherit;">
+    <h2>Data sources →</h2>
+    <p class="muted" style="margin:0;">Add files, live weather, and HTTP/JSON APIs; manage connections.</p>
+  </a>
+  <a class="card" href="/operators" style="color:inherit;">
+    <h2>Operators &amp; assignments →</h2>
+    <p class="muted" style="margin:0;">Register operators and assign which datasets they can see.</p>
+  </a>
+  <a class="card" href="/pilots" style="color:inherit;">
+    <h2>USAF pilots dataset →</h2>
+    <p class="muted" style="margin:0;">Import and inspect the pilots dataset.</p>
+  </a>
+  <a class="card" href="/missions" style="color:inherit;">
+    <h2>Mission readiness →</h2>
+    <p class="muted" style="margin:0;">The operator readiness view and status wheel.</p>
+  </a>
+</div>
+{{end}}
 
-  {{if eq .View "operator"}}
-  <div class="card">
-    <h2>Your datasets {{if .IsAdmin}}<span class="muted">(previewing operator <code>{{.PreviewAs}}</code>)</span>{{end}}</h2>
-    {{if .MyDatasets}}
-      <p class="muted">Datasets assigned to you. Open one to view and filter its data.</p>
-      <ul>
-        {{range .MyDatasets}}
-        <li style="margin:.4rem 0;">
-          {{if eq .Kind "pilots"}}
-            <a class="btn" href="/missions">{{.Name}} — mission readiness →</a>
-          {{else}}
-            <a class="btn" href="/datasets/{{.Collection}}">{{.Name}} →</a>
-          {{end}}
-        </li>
+{{if eq .View "operator"}}
+<div class="card">
+  <h2>Your datasets {{if .IsAdmin}}<span class="muted" style="font-weight:400;">— previewing <code>{{.PreviewAs}}</code></span>{{end}}</h2>
+  {{if .MyDatasets}}
+    <div class="grid2">
+      {{range .MyDatasets}}
+        {{if eq .Kind "pilots"}}
+          <a class="card tight" href="/missions" style="color:inherit; margin:0;"><strong>{{.Name}}</strong><br><span class="muted">Mission readiness →</span></a>
+        {{else}}
+          <a class="card tight" href="/datasets/{{.Collection}}" style="color:inherit; margin:0;"><strong>{{.Name}}</strong><br><span class="muted">Open dataset →</span></a>
         {{end}}
-      </ul>
-    {{else}}
-      <p class="muted">No datasets are assigned to you yet. An admin assigns datasets under <em>Operators &amp; assignments</em>.</p>
-    {{end}}
-  </div>
-  {{end}}
-
-  <div class="card">
-    <h2>Realm roles</h2>
-    {{if .RealmRoles}}
-      {{range .RealmRoles}}<span class="pill">{{.}}</span>{{end}}
-    {{else}}
-      <p class="muted">No realm roles assigned.</p>
-    {{end}}
-  </div>
-
-  <div class="card">
-    <h2>Groups</h2>
-    {{if .Groups}}
-      {{range .Groups}}<span class="pill">{{.}}</span>{{end}}
-    {{else}}
-      <p class="muted">No groups.</p>
-    {{end}}
-  </div>
-
-  <div class="card">
-    <h2>Client roles</h2>
-    {{if .ClientRoles}}
-      {{range $client, $roles := .ClientRoles}}
-        <p><strong>{{$client}}</strong><br>
-        {{range $roles}}<span class="pill">{{.}}</span>{{end}}</p>
       {{end}}
-    {{else}}
-      <p class="muted">No client roles assigned.</p>
-    {{end}}
-  </div>
+    </div>
+  {{else}}
+    <div class="empty">No datasets are assigned to you yet. An admin assigns datasets under <em>Operators &amp; assignments</em>.</div>
+  {{end}}
+</div>
+{{end}}
 
-  <div class="card">
-    <h2>API</h2>
-    <p>The same token works for the JSON API. Try:</p>
-    <p><code>GET /api/me</code> — your verified claims (any authenticated user)<br>
-       <code>GET /api/admin</code> — requires the <code>admin</code> realm role</p>
+<details class="card">
+  <summary style="cursor:pointer; font-weight:600;">Identity &amp; token details</summary>
+  <div class="stack" style="margin-top:1rem;">
+    <div>
+      <div class="label">Realm roles</div>
+      {{if .RealmRoles}}{{range .RealmRoles}}<span class="pill accent" style="margin:.1rem;">{{.}}</span>{{end}}{{else}}<span class="muted">none</span>{{end}}
+    </div>
+    <div>
+      <div class="label">Groups</div>
+      {{if .Groups}}{{range .Groups}}<span class="pill accent" style="margin:.1rem;">{{.}}</span>{{end}}{{else}}<span class="muted">none</span>{{end}}
+    </div>
+    <div>
+      <div class="label">Client roles</div>
+      {{if .ClientRoles}}{{range $client, $roles := .ClientRoles}}<p style="margin:.3rem 0;"><strong>{{$client}}</strong> {{range $roles}}<span class="pill accent" style="margin:.1rem;">{{.}}</span>{{end}}</p>{{end}}{{else}}<span class="muted">none</span>{{end}}
+    </div>
+    <p class="muted" style="font-size:.85rem;">The same token works for the JSON API — <code>GET /api/me</code> (any user), <code>GET /api/admin</code> (admin realm role).</p>
   </div>
-</body>
-</html>{{end}}
+</details>
+{{end}}

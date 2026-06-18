@@ -1,51 +1,24 @@
-{{define "pilots.html"}}<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>USAF Pilots · Keycloak Portal</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 1000px; margin: 3rem auto; padding: 0 1rem; color: #1a1a2e; }
-    .card { border: 1px solid #e0e0e0; border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 1.5rem; }
-    h1 { margin-top: 0; }
-    .btn { display: inline-block; background: #4636f5; color: #fff; border: none; padding: .6rem 1.2rem; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
-    table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .85rem; }
-    th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid #eee; white-space: nowrap; }
-    th { position: sticky; top: 0; background: #fafafe; }
-    .wrap { overflow-x: auto; }
-    .muted { color: #777; }
-    .ok { background: #e6f7ed; color: #1c7a44; padding: .6rem 1rem; border-radius: 8px; }
-    .err { background: #fff0f0; color: #d63031; padding: .6rem 1rem; border-radius: 8px; }
-    .pill { display:inline-block; padding:.15rem .6rem; border-radius:999px; font-size:.75rem; font-weight:700; }
-    .green { background:#e6f7ed; color:#1c7a44; } .red { background:#fff6e0; color:#946200; }
-    code { background: #f4f4f8; padding: .1rem .35rem; border-radius: 4px; }
-  </style>
-</head>
-<body>
-  <p><a href="/dashboard">← Dashboard</a></p>
-  <h1>USAF Pilots <span class="muted">(MHS Genesis synthetic)</span></h1>
+{{define "pilots.html"}}
+<div class="page-head">
+  <h1>USAF pilots <span class="muted" style="font-weight:400; font-size:1rem;">(MHS Genesis synthetic)</span></h1>
+</div>
 
-  {{if .Imported}}<p class="ok">Imported {{.Imported}} pilots into the peat mesh.</p>{{end}}
-  {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+{{if .Imported}}<div class="banner ok">Imported {{.Imported}} pilots into the peat mesh.</div>{{end}}
+{{if .Error}}<div class="banner err">{{.Error}}</div>{{end}}
 
-  <div class="card">
-    <p>
-      Mesh:
-      {{if .PeatConnected}}<span class="pill green">connected</span>{{else}}<span class="pill red">disconnected</span>{{end}}
-      &nbsp; Stored pilots: <strong>{{.Total}}</strong>
-    </p>
-    <p>Import the embedded dataset into the peat node (collection <code>pilots</code>).
-       Records persist on this edge node and sync across the mesh.</p>
-    <form method="POST" action="/pilots/import">
-      <button class="btn" type="submit">Import dataset</button>
-    </form>
-    <p class="muted" style="margin-top:.75rem;">Full set available at <code>GET /api/pilots</code>.</p>
+<div class="card">
+  <div class="toolbar">
+    <div>Stored pilots: <strong>{{.Total}}</strong></div>
+    <span class="spacer"></span>
+    <form method="POST" action="/pilots/import" style="display:inline;"><button class="btn" type="submit">Import dataset</button></form>
   </div>
+  <p class="muted" style="margin:.75rem 0 0; font-size:.85rem;">Imports the embedded dataset into the peat node (collection <code>pilots</code>); records persist on this edge node and sync across the mesh. Full set at <code>GET /api/pilots</code>.</p>
+</div>
 
-  <div class="card">
-    <h2>Pilots {{if lt .Shown .Total}}<span class="muted">(showing first {{.Shown}} of {{.Total}})</span>{{end}}</h2>
-    {{if .Pilots}}
-    <div class="wrap">
+<div class="card">
+  <h2>Pilots {{if lt .Shown .Total}}<span class="muted" style="font-weight:400;">(showing first {{.Shown}} of {{.Total}})</span>{{end}}</h2>
+  {{if .Pilots}}
+  <div class="table-wrap">
     <table>
       <thead><tr>
         <th>ID</th><th>Age</th><th>Gender</th><th>Rank</th><th>Base</th><th>Aircraft</th>
@@ -62,10 +35,9 @@
         {{end}}
       </tbody>
     </table>
-    </div>
-    {{else}}
-      <p class="muted">No pilots yet. Click <strong>Import dataset</strong> above.</p>
-    {{end}}
   </div>
-</body>
-</html>{{end}}
+  {{else}}
+    <div class="empty">No pilots yet. Click <strong>Import dataset</strong> above.</div>
+  {{end}}
+</div>
+{{end}}

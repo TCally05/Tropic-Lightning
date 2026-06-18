@@ -1,150 +1,109 @@
-{{define "dataset_view.html"}}<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{.Name}} · Dataset · Keycloak Portal</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 3rem auto; padding: 0 1rem; color: #1a1a2e; }
-    .card { border: 1px solid #e0e0e0; border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 1.5rem; }
-    h1 { margin-top: 0; }
-    .muted { color: #777; }
-    .ok { background:#e6f7ed; color:#1c7a44; padding:.6rem 1rem; border-radius:8px; }
-    .err { background:#fff0f0; color:#d63031; padding:.6rem 1rem; border-radius:8px; }
-    .toggle { display:inline-block; text-decoration:none; border:1px solid #4636f5; color:#4636f5; padding:.35rem .8rem; border-radius:6px; margin-right:1rem; }
-    .toggle.on { background:#4636f5; color:#fff; }
-    table { width:100%; border-collapse:collapse; margin-top:.5rem; font-size:.82rem; }
-    th, td { text-align:left; padding:.35rem .5rem; border-bottom:1px solid #eee; white-space:nowrap; }
-    th { position:sticky; top:0; background:#fafafe; }
-    .wrap { overflow-x:auto; }
-    code { background:#f4f4f8; padding:.05rem .3rem; border-radius:4px; }
-    .donut { width:170px; height:170px; border-radius:50%; position:relative; flex:none; }
-    .donut .hole { position:absolute; inset:26%; background:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.1rem; color:#444; }
-  </style>
-</head>
-<body>
-  <p><a href="/datasources">← Data sources</a></p>
-  <h1>{{.Name}}</h1>
+{{define "dataset_view.html"}}
+{{$coll := .Collection}}
+{{$bq := .BackQuery}}
+{{$cols := .Columns}}
+{{$edit := .EditMode}}
+{{/* filter querystring (without edit) for toggle links */}}
+{{$fq := ""}}
+{{if .FilterCol}}{{$fq = printf "&col=%s" (urlquery .FilterCol)}}{{end}}
+{{if .FilterVal}}{{$fq = printf "%s&val=%s" $fq (urlquery .FilterVal)}}{{end}}
+{{if .FilterQuery}}{{$fq = printf "%s&q=%s" $fq (urlquery .FilterQuery)}}{{end}}
 
-  {{if .Imported}}<p class="ok">Imported {{.Imported}} rows into the peat mesh.{{if .Capped}} (file had {{.Capped}}; capped to {{.Imported}}){{end}}</p>{{end}}
+<div class="crumb"><a href="/datasources">← Data sources</a></div>
 
-  <div class="card">
-    <form method="GET" action="/datasets/{{.Collection}}" style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap;">
-      <label style="font-size:.72rem; font-weight:700; color:#555;">Column
-        <select name="col" style="display:block; padding:.3rem; border:1px solid #ccc; border-radius:6px;">
-          <option value="">—</option>
-          {{$fc := .FilterCol}}
-          {{range .Columns}}<option value="{{.}}" {{if eq $fc .}}selected{{end}}>{{.}}</option>{{end}}
-        </select>
-      </label>
-      <label style="font-size:.72rem; font-weight:700; color:#555;">Value contains
-        <input type="text" name="val" value="{{.FilterVal}}" style="display:block; padding:.3rem; border:1px solid #ccc; border-radius:6px;">
-      </label>
-      <label style="font-size:.72rem; font-weight:700; color:#555;">Search (any column)
-        <input type="text" name="q" value="{{.FilterQuery}}" style="display:block; padding:.3rem; border:1px solid #ccc; border-radius:6px;">
-      </label>
-      <button type="submit" style="background:#4636f5;color:#fff;border:none;padding:.45rem 1rem;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;">Filter</button>
-      {{if .FilterActive}}<a href="/datasets/{{.Collection}}" style="padding:.45rem 1rem;">Clear</a>{{end}}
-    </form>
+<div class="page-head toolbar">
+  <div>
+    <h1 style="margin:0;">{{.Name}}</h1>
+    <p class="muted" style="margin:.2rem 0 0; font-size:.85rem;">{{len .Columns}} columns · {{.Total}}{{if .FilterActive}} matching of {{.GrandTotal}}{{end}} rows{{if lt .Shown .Total}} (showing first {{.Shown}}){{end}}{{if .LiveConnector}} · <span class="pill accent">live</span>{{end}}</p>
   </div>
-
-  {{$coll := .Collection}}
-  {{$bq := .BackQuery}}
-  {{$cols := .Columns}}
-  {{$edit := .EditMode}}
-  {{/* reconstruct the filter querystring (without edit) for the toggle links */}}
-  {{$fq := ""}}
-  {{if .FilterCol}}{{$fq = printf "&col=%s" (urlquery .FilterCol)}}{{end}}
-  {{if .FilterVal}}{{$fq = printf "%s&val=%s" $fq (urlquery .FilterVal)}}{{end}}
-  {{if .FilterQuery}}{{$fq = printf "%s&q=%s" $fq (urlquery .FilterQuery)}}{{end}}
-
-  <div class="card">
-    <h2 style="margin-top:0;">Visualization</h2>
-    {{if and (eq .ViewType "wheel") .WheelSegments}}
-      <div style="display:flex; gap:2rem; align-items:center; flex-wrap:wrap;">
-        <div class="donut" style="background:{{.WheelGradient}};"><div class="hole">{{.Total}}</div></div>
-        <div>
-          <p class="muted" style="margin:0 0 .5rem;">Grouped by <strong>{{.ViewGroupBy}}</strong> · {{.Total}} rows{{if .FilterActive}} (filtered of {{.GrandTotal}}){{end}}.</p>
-          <table style="font-size:.85rem;">
-            <tbody>
-            {{range .WheelSegments}}
-              <tr>
-                <td><span style="display:inline-block;width:.85rem;height:.85rem;border-radius:3px;background:{{.Color}};"></span></td>
-                <td>{{.Label}}</td>
-                <td style="text-align:right;font-weight:700;padding-left:1rem;">{{.Count}}</td>
-                <td class="muted" style="text-align:right;padding-left:.6rem;">{{printf "%.0f%%" .Pct}}</td>
-              </tr>
-            {{end}}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    {{else if eq .ViewType "wheel"}}
-      <p class="muted">Wheel selected, but no <em>group-by</em> column is set (or there are no rows to chart). Pick one below.</p>
-    {{else}}
-      <p class="muted">Showing as a <strong>table</strong>. Switch to a <strong>status wheel</strong> to chart any column (e.g. weather condition, status, base).</p>
-    {{end}}
-
-    <form method="POST" action="/datasets/{{$coll}}/view?{{$bq}}" style="display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap; margin-top:1rem;">
-      <label style="font-size:.72rem; font-weight:700; color:#555;">View as
-        <select name="type" style="display:block; padding:.3rem; border:1px solid #ccc; border-radius:6px;">
-          <option value="table" {{if ne .ViewType "wheel"}}selected{{end}}>Table</option>
-          <option value="wheel" {{if eq .ViewType "wheel"}}selected{{end}}>Status wheel</option>
-        </select>
-      </label>
-      <label style="font-size:.72rem; font-weight:700; color:#555;">Group by (for wheel)
-        <select name="group_by" style="display:block; padding:.3rem; border:1px solid #ccc; border-radius:6px;">
-          <option value="">—</option>
-          {{$gb := .ViewGroupBy}}
-          {{range .Columns}}<option value="{{.}}" {{if eq $gb .}}selected{{end}}>{{.}}</option>{{end}}
-        </select>
-      </label>
-      <button type="submit" style="background:#4636f5;color:#fff;border:none;padding:.45rem 1rem;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;">Apply</button>
-    </form>
-  </div>
-
+  <span class="spacer"></span>
   {{if .LiveConnector}}
-  <div class="card">
-    <h2 style="margin-top:0;">Live source</h2>
-    <p class="muted" style="margin:0 0 .6rem;">This dataset is backed by a live connector. It refreshes in the background when the node is connected; pull the latest now below. A refresh replaces the snapshot, so manual row edits will be overwritten.</p>
-    <form method="POST" action="/datasets/{{$coll}}/refresh?{{$bq}}" style="display:inline;">
-      <button type="submit" style="background:#1c9d52;color:#fff;border:none;padding:.45rem 1rem;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;">↻ Refresh now</button>
+  <form method="POST" action="/datasets/{{$coll}}/refresh?{{$bq}}" style="display:inline;"><button class="btn go sm" type="submit">↻ Refresh now</button></form>
+  {{end}}
+  {{if $edit}}
+    <a class="btn sm" href="/datasets/{{$coll}}{{if $fq}}?{{slice $fq 1}}{{end}}">✓ Done editing</a>
+  {{else}}
+    <a class="btn ghost sm" href="/datasets/{{$coll}}?edit=1{{$fq}}">✎ Edit rows</a>
+  {{end}}
+</div>
+
+{{if .Imported}}<div class="banner ok">Imported {{.Imported}} rows into the peat mesh.{{if .Capped}} (file had {{.Capped}}; capped to {{.Imported}}){{end}}</div>{{end}}
+{{if .Error}}<div class="banner err">{{.Error}}</div>{{end}}
+{{if .LiveConnector}}<div class="banner info">This dataset is backed by a live connector — refreshing replaces the snapshot, so manual row edits are overwritten on refresh.</div>{{end}}
+
+{{if and (eq .ViewType "wheel") .WheelSegments}}
+<div class="card">
+  <div style="display:flex; gap:2rem; align-items:center; flex-wrap:wrap;">
+    <div style="width:170px; height:170px; border-radius:50%; position:relative; flex:none; background:{{.WheelGradient}};">
+      <div style="position:absolute; inset:26%; background:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:1.3rem;">{{.Total}}</div>
+    </div>
+    <div>
+      <h2 style="margin:0 0 .5rem;">Grouped by {{.ViewGroupBy}}</h2>
+      <table style="font-size:.85rem; width:auto;">
+        <tbody>
+        {{range .WheelSegments}}
+          <tr>
+            <td style="border:none; padding:.2rem .5rem;"><span style="display:inline-block;width:.85rem;height:.85rem;border-radius:3px;background:{{.Color}};"></span></td>
+            <td style="border:none; padding:.2rem .5rem;">{{.Label}}</td>
+            <td style="border:none; padding:.2rem .5rem; text-align:right; font-weight:700;">{{.Count}}</td>
+            <td style="border:none; padding:.2rem .5rem; text-align:right; color:var(--muted);">{{printf "%.0f%%" .Pct}}</td>
+          </tr>
+        {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{{end}}
+
+<details class="card tight" {{if .FilterActive}}open{{end}}>
+  <summary style="cursor:pointer; font-weight:600;">Filter {{if .FilterActive}}<span class="pill accent">active</span>{{end}}</summary>
+  <form method="GET" action="/datasets/{{$coll}}" class="inline-fields" style="margin-top:1rem;">
+    <div class="field"><label>Column</label>
+      <select name="col" style="width:auto;"><option value="">—</option>{{$fc := .FilterCol}}{{range .Columns}}<option value="{{.}}" {{if eq $fc .}}selected{{end}}>{{.}}</option>{{end}}</select>
+    </div>
+    <div class="field"><label>Value contains</label><input type="text" name="val" value="{{.FilterVal}}"></div>
+    <div class="field"><label>Search (any column)</label><input type="text" name="q" value="{{.FilterQuery}}"></div>
+    <div class="field"><button class="btn" type="submit">Apply</button></div>
+    {{if .FilterActive}}<div class="field"><a class="btn subtle" href="/datasets/{{$coll}}">Clear</a></div>{{end}}
+  </form>
+</details>
+
+<details class="card tight">
+  <summary style="cursor:pointer; font-weight:600;">Visualization <span class="muted" style="font-weight:400;">— currently {{if eq .ViewType "wheel"}}status wheel{{else}}table{{end}}</span></summary>
+  <form method="POST" action="/datasets/{{$coll}}/view?{{$bq}}" class="inline-fields" style="margin-top:1rem;">
+    <div class="field"><label>View as</label>
+      <select name="type" style="width:auto;"><option value="table" {{if ne .ViewType "wheel"}}selected{{end}}>Table</option><option value="wheel" {{if eq .ViewType "wheel"}}selected{{end}}>Status wheel</option></select>
+    </div>
+    <div class="field"><label>Group by (for wheel)</label>
+      <select name="group_by" style="width:auto;"><option value="">—</option>{{$gb := .ViewGroupBy}}{{range .Columns}}<option value="{{.}}" {{if eq $gb .}}selected{{end}}>{{.}}</option>{{end}}</select>
+    </div>
+    <div class="field"><button class="btn" type="submit">Apply</button></div>
+  </form>
+</details>
+
+<div class="card">
+  {{if $edit}}
+  <div class="toolbar" style="margin-bottom:.75rem;">
+    <form method="POST" action="/datasets/{{$coll}}/columns/add?{{$bq}}" style="display:inline-flex; gap:.4rem;">
+      <input type="text" name="name" placeholder="new column name" style="width:12rem;">
+      <button class="btn subtle sm" type="submit">+ Column</button>
     </form>
+    <span class="spacer"></span>
+    <button class="btn subtle sm" type="button" onclick="addRow()">+ Add row</button>
+    <button class="btn go sm" type="button" onclick="saveAll()">Save all changes</button>
+    <span id="savestatus" class="muted" style="font-size:.85rem;"></span>
   </div>
   {{end}}
 
-  <div class="card">
-    <h2 style="margin-top:0;">Edit</h2>
-    {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
-    <form method="POST" action="/datasets/{{$coll}}/columns/add?{{$bq}}" style="display:inline-flex; gap:.4rem; align-items:center; margin-right:1rem;">
-      <input type="text" name="name" placeholder="new column name" style="padding:.3rem; border:1px solid #ccc; border-radius:6px;">
-      <button type="submit" style="background:#4636f5;color:#fff;border:none;padding:.35rem .8rem;border-radius:6px;font:inherit;cursor:pointer;">+ Column</button>
-    </form>
-    {{if $edit}}
-      <a class="toggle on" href="/datasets/{{$coll}}{{if $fq}}?{{slice $fq 1}}{{end}}">✓ Done editing</a>
-      <button type="button" onclick="addRow()" style="background:#fff;color:#1c9d52;border:1px solid #1c9d52;border-radius:6px;padding:.35rem .8rem;font:inherit;cursor:pointer;margin-right:.5rem;">+ Add row</button>
-      <button type="button" onclick="saveAll()" style="background:#1c9d52;color:#fff;border:none;border-radius:6px;padding:.35rem 1rem;font:inherit;font-weight:600;cursor:pointer;">Save all changes</button>
-      <span id="savestatus" class="muted" style="margin-left:.6rem;"></span>
-      <p class="muted" style="margin:.5rem 0 0;">Edit any cells, add or remove rows, then click <strong>Save all changes</strong> once.</p>
-    {{else}}
-      <a class="toggle" href="/datasets/{{$coll}}?edit=1{{$fq}}">✎ Edit rows</a>
-      <span class="muted">Switch to <em>Edit rows</em> to add rows and change values in bulk, then save once.</span>
-    {{end}}
-  </div>
-
-  <div class="card">
-    <p class="muted">{{len .Columns}} columns · {{.Total}}{{if .FilterActive}} matching of {{.GrandTotal}}{{end}} rows{{if lt .Shown .Total}} (showing first {{.Shown}}){{end}} · stored as a peat dataset.</p>
-    <div class="wrap">
+  {{if .Rows}}
+  <div class="table-wrap">
     <table>
       <thead>
         <tr>
           {{range .Columns}}
-          <th>
-            {{.}}
-            <form method="POST" action="/datasets/{{$coll}}/columns/delete?{{$bq}}" style="display:inline;" onsubmit="return confirm('Delete column {{.}}? This removes its values.');">
-              <input type="hidden" name="name" value="{{.}}">
-              <button type="submit" title="delete column" style="border:none;background:none;color:#d63031;cursor:pointer;font-weight:700;">×</button>
-            </form>
+          <th>{{.}}
+            {{if $edit}}<form method="POST" action="/datasets/{{$coll}}/columns/delete?{{$bq}}" style="display:inline;" onsubmit="return confirm('Delete column {{.}}? This removes its values.');"><input type="hidden" name="name" value="{{.}}"><button type="submit" title="delete column" style="border:none;background:none;color:var(--red);cursor:pointer;font-weight:700;">×</button></form>{{end}}
           </th>
           {{end}}
           <th></th>
@@ -155,78 +114,50 @@
         {{$row := .}}
         <tr class="drow" data-id="{{$row.ID}}">
           {{if $edit}}
-            {{range $cols}}<td><input class="cell" data-col="{{.}}" value="{{index $row.Fields .}}" style="width:100%; box-sizing:border-box; padding:.25rem; border:1px solid #ccc; border-radius:4px;"></td>{{end}}
-            <td><button type="button" onclick="removeRow(this)" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Remove</button></td>
+            {{range $cols}}<td><input class="cell" data-col="{{.}}" value="{{index $row.Fields .}}" style="width:100%; padding:.25rem;"></td>{{end}}
+            <td><button class="btn danger sm" type="button" onclick="removeRow(this)">Remove</button></td>
           {{else}}
             {{range $cols}}<td>{{index $row.Fields .}}</td>{{end}}
-            <td>
-              <form method="POST" action="/datasets/{{$coll}}/rows/delete?{{$bq}}" style="display:inline;" onsubmit="return confirm('Delete this row?');">
-                <input type="hidden" name="id" value="{{$row.ID}}">
-                <button type="submit" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Delete</button>
-              </form>
-            </td>
+            <td style="text-align:right;"><form method="POST" action="/datasets/{{$coll}}/rows/delete?{{$bq}}" style="display:inline;" onsubmit="return confirm('Delete this row?');"><input type="hidden" name="id" value="{{$row.ID}}"><button class="btn danger sm" type="submit">Delete</button></form></td>
           {{end}}
         </tr>
         {{end}}
       </tbody>
     </table>
-    </div>
-    {{if not .Rows}}<p class="muted">No rows yet{{if $edit}} — click “+ Add row”{{else}} — switch to Edit rows to add some{{end}}.</p>{{end}}
   </div>
-
-  {{if $edit}}
-  <template id="rowtmpl">
-    <tr class="drow" data-id="">
-      {{range $cols}}<td><input class="cell" data-col="{{.}}" style="width:100%; box-sizing:border-box; padding:.25rem; border:1px solid #ccc; border-radius:4px;"></td>{{end}}
-      <td><button type="button" onclick="removeRow(this)" style="background:#fff;color:#d63031;border:1px solid #d63031;border-radius:6px;padding:.15rem .5rem;font:inherit;font-size:.78rem;cursor:pointer;">Remove</button></td>
-    </tr>
-  </template>
-  <script>
-    var BULK = "/datasets/" + {{$coll}} + "/bulk";
-    var rowsBody = document.getElementById('rows');
-    rowsBody.addEventListener('input', function(e){
-      var tr = e.target.closest('.drow'); if (tr) tr.dataset.dirty = '1';
-    });
-    function addRow(){
-      var clone = document.getElementById('rowtmpl').content.firstElementChild.cloneNode(true);
-      clone.dataset.dirty = '1';
-      rowsBody.appendChild(clone);
-      var i = clone.querySelector('input'); if (i) i.focus();
-    }
-    function removeRow(btn){
-      var tr = btn.closest('.drow');
-      if (tr.dataset.id){ tr.dataset.del = '1'; tr.style.display = 'none'; }
-      else { tr.remove(); }
-    }
-    function fieldsOf(tr){
-      var f = {};
-      tr.querySelectorAll('input.cell').forEach(function(inp){ f[inp.getAttribute('data-col')] = inp.value; });
-      return f;
-    }
-    async function saveAll(){
-      var rows = [], deletes = [], st = document.getElementById('savestatus');
-      document.querySelectorAll('#rows .drow').forEach(function(tr){
-        var id = tr.dataset.id || '';
-        if (tr.dataset.del === '1'){ if (id) deletes.push(id); return; }
-        if (id && tr.dataset.dirty !== '1') return;        // unchanged existing row
-        if (!id){
-          var f = fieldsOf(tr);
-          var any = Object.keys(f).some(function(k){ return f[k].trim() !== ''; });
-          if (!any) return;                                 // skip blank new row
-          rows.push({id:'', fields:f}); return;
-        }
-        rows.push({id:id, fields: fieldsOf(tr)});
-      });
-      if (rows.length === 0 && deletes.length === 0){ st.textContent = 'No changes.'; return; }
-      st.textContent = 'Saving…';
-      try {
-        var r = await fetch(BULK, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({rows:rows, deletes:deletes})});
-        var d = await r.json();
-        if (!r.ok){ st.textContent = 'Error: ' + (d.error || r.status); return; }
-        location.reload();
-      } catch(e){ st.textContent = 'Error: ' + e; }
-    }
-  </script>
+  {{else}}
+    <div class="empty">No rows yet{{if $edit}} — click “+ Add row”{{else if .LiveConnector}} — click “Refresh now”{{else}} — switch to Edit rows to add some{{end}}.</div>
   {{end}}
-</body>
-</html>{{end}}
+</div>
+
+{{if $edit}}
+<template id="rowtmpl">
+  <tr class="drow" data-id="">
+    {{range $cols}}<td><input class="cell" data-col="{{.}}" style="width:100%; padding:.25rem;"></td>{{end}}
+    <td><button class="btn danger sm" type="button" onclick="removeRow(this)">Remove</button></td>
+  </tr>
+</template>
+<script>
+  var BULK = "/datasets/" + {{$coll}} + "/bulk";
+  var rowsBody = document.getElementById('rows');
+  rowsBody.addEventListener('input', function(e){ var tr=e.target.closest('.drow'); if(tr) tr.dataset.dirty='1'; });
+  function addRow(){ var c=document.getElementById('rowtmpl').content.firstElementChild.cloneNode(true); c.dataset.dirty='1'; rowsBody.appendChild(c); var i=c.querySelector('input'); if(i) i.focus(); }
+  function removeRow(btn){ var tr=btn.closest('.drow'); if(tr.dataset.id){ tr.dataset.del='1'; tr.style.display='none'; } else { tr.remove(); } }
+  function fieldsOf(tr){ var f={}; tr.querySelectorAll('input.cell').forEach(function(inp){ f[inp.getAttribute('data-col')]=inp.value; }); return f; }
+  async function saveAll(){
+    var rows=[], deletes=[], st=document.getElementById('savestatus');
+    document.querySelectorAll('#rows .drow').forEach(function(tr){
+      var id=tr.dataset.id||'';
+      if(tr.dataset.del==='1'){ if(id) deletes.push(id); return; }
+      if(id && tr.dataset.dirty!=='1') return;
+      if(!id){ var f=fieldsOf(tr); if(!Object.keys(f).some(function(k){return f[k].trim()!=='';})) return; rows.push({id:'',fields:f}); return; }
+      rows.push({id:id, fields:fieldsOf(tr)});
+    });
+    if(rows.length===0 && deletes.length===0){ st.textContent='No changes.'; return; }
+    st.textContent='Saving…';
+    try { var r=await fetch(BULK,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({rows:rows,deletes:deletes})}); var d=await r.json(); if(!r.ok){ st.textContent='Error: '+(d.error||r.status); return; } location.reload(); }
+    catch(e){ st.textContent='Error: '+e; }
+  }
+</script>
+{{end}}
+{{end}}

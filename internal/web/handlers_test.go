@@ -630,18 +630,19 @@ func TestDashboardAdminViewSelector(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		return rec.Body.String()
 	}
-	// Admin default view shows the admin card + selector.
+	// Admin default view shows the admin cards + selector. ("Data sources →" is
+	// the admin content card; the bare nav link is present on every admin page.)
 	body := get("")
-	if !strings.Contains(body, "View as") || !strings.Contains(body, "/datasources") {
+	if !strings.Contains(body, "Viewing as") || !strings.Contains(body, "Data sources →") {
 		t.Error("admin dashboard should show the view selector and admin card")
 	}
-	// Operator preview shows the "Your datasets" card, not the admin card.
+	// Operator preview shows the "Your datasets" card, not the admin cards.
 	op := get("?view=operator")
 	if !strings.Contains(op, "Your datasets") {
 		t.Error("operator view should show the 'Your datasets' card")
 	}
-	if strings.Contains(op, "/datasources") {
-		t.Error("operator view should NOT show admin data-source link")
+	if strings.Contains(op, "Data sources →") {
+		t.Error("operator view should NOT show the admin data-source card")
 	}
 
 	// Non-admin never sees the selector; gets the operator dashboard.
