@@ -23,6 +23,8 @@ type View struct {
 	Query     string `json:"query"`
 
 	// visualization (empty = use the dataset's own setting)
-	ViewType string `json:"view_type"` // "" | "table" | "wheel"
+	ViewType string `json:"view_type"` // "" | table | wheel | bar | line | stats
 	GroupBy  string `json:"group_by"`
+	ValueCol string `json:"value_col"`
+	Agg      string `json:"agg"`
 }

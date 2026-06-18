@@ -94,10 +94,21 @@ func (s *Service) SetView(ctx context.Context, key string, view ViewConfig) erro
 		return err
 	}
 	view.Type = strings.TrimSpace(view.Type)
-	if view.Type != "wheel" {
+	switch view.Type {
+	case "wheel", "bar", "line", "stats":
+		// valid chart type
+	default:
 		view.Type = "table"
 	}
 	view.GroupBy = strings.TrimSpace(view.GroupBy)
+	view.ValueCol = strings.TrimSpace(view.ValueCol)
+	view.Agg = strings.TrimSpace(view.Agg)
+	switch view.Agg {
+	case "sum", "avg", "min", "max":
+		// valid aggregation
+	default:
+		view.Agg = "count"
+	}
 	d.View = view
 	return s.store.PutDataset(ctx, d)
 }

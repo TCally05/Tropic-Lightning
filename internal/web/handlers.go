@@ -726,6 +726,8 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 	q := qry.Get("q")
 	vtype := qry.Get("vtype") // per-view visualization override
 	vgroup := qry.Get("vgroup")
+	vval := qry.Get("vval")
+	vagg := qry.Get("vagg")
 	activeView := qry.Get("view") // a saved view id, or "none", or ""
 	editMode := qry.Get("edit") == "1"
 
@@ -735,7 +737,7 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 	var savedViews []views.View
 	if s.views != nil {
 		savedViews, _ = s.views.List(ctx, owner, collection)
-		clean := col == "" && val == "" && q == "" && vtype == "" && vgroup == "" && activeView == "" && !editMode
+		clean := col == "" && val == "" && q == "" && vtype == "" && vgroup == "" && vval == "" && vagg == "" && activeView == "" && !editMode
 		if clean {
 			if def, ok, _ := s.views.Default(ctx, owner, collection); ok {
 				http.Redirect(w, r, "/datasets/"+collection+"?"+viewQuery(def), http.StatusFound)
@@ -766,17 +768,33 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		shown = shown[:pilotsDisplayLimit]
 	}
 
-	// Effective visualization: a saved view's override (vtype/vgroup in the URL)
+	// Effective visualization: a saved view's override (v* params in the URL)
 	// wins; otherwise fall back to the dataset's own shared setting.
-	effType, effGroup := vtype, vgroup
+	effType, effGroup, effVal, effAgg := vtype, vgroup, vval, vagg
 	if effType == "" {
 		dv := s.datasetView(ctx, collection)
-		effType, effGroup = dv.Type, dv.GroupBy
+		effType, effGroup, effVal, effAgg = dv.Type, dv.GroupBy, dv.ValueCol, dv.Agg
+	}
+	if effAgg == "" {
+		effAgg = "count"
 	}
 	var segments []wheelSegment
 	var gradient template.CSS
-	if effType == "wheel" && effGroup != "" {
-		segments, gradient = computeWheel(filtered, effGroup)
+	var bars []barVM
+	var stats statsVM
+	var line lineVM
+	var hasLine bool
+	switch effType {
+	case "wheel":
+		if effGroup != "" {
+			segments, gradient = computeWheel(filtered, effGroup)
+		}
+	case "bar":
+		bars = computeBars(filtered, effGroup, effVal, effAgg)
+	case "line":
+		line, hasLine = computeLine(filtered, effGroup, effVal, effAgg)
+	case "stats":
+		stats = computeStats(filtered, effVal)
 	}
 
 	// View models: an apply querystring + active flag for each saved view.
@@ -810,8 +828,14 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		"Error":         qry.Get("error"),
 		"ViewType":      effType,
 		"ViewGroupBy":   effGroup,
+		"ViewValueCol":  effVal,
+		"ViewAgg":       effAgg,
 		"WheelSegments": segments,
 		"WheelGradient": gradient,
+		"Bars":          bars,
+		"Stats":         stats,
+		"Line":          line,
+		"HasLine":       hasLine,
 		"IsAdmin":       s.auth.IsAdmin(claimsOf(r)),
 		// wx_ (weather) and api_ (HTTP/JSON) datasets are backed by a live
 		// connector and can be re-pulled on demand.
@@ -840,6 +864,12 @@ func viewQuery(v views.View) string {
 	if v.GroupBy != "" {
 		q.Set("vgroup", v.GroupBy)
 	}
+	if v.ValueCol != "" {
+		q.Set("vval", v.ValueCol)
+	}
+	if v.Agg != "" {
+		q.Set("vagg", v.Agg)
+	}
 	q.Set("view", v.ID)
 	return q.Encode()
 }
@@ -867,6 +897,8 @@ func (s *Server) handleViewSave(w http.ResponseWriter, r *http.Request) {
 		Query:      r.PostFormValue("q"),
 		ViewType:   r.PostFormValue("vtype"),
 		GroupBy:    r.PostFormValue("vgroup"),
+		ValueCol:   r.PostFormValue("vval"),
+		Agg:        r.PostFormValue("vagg"),
 	}
 	saved, err := s.views.Save(r.Context(), v)
 	if err != nil {
@@ -925,7 +957,7 @@ func (s *Server) handleViewSetDefault(w http.ResponseWriter, r *http.Request) {
 // to return to the same view after an error).
 func viewQueryFromForm(r *http.Request) string {
 	q := url.Values{}
-	for _, k := range []string{"col", "val", "q", "vtype", "vgroup"} {
+	for _, k := range []string{"col", "val", "q", "vtype", "vgroup", "vval", "vagg"} {
 		if v := r.PostFormValue(k); v != "" {
 			q.Set(k, v)
 		}
@@ -947,8 +979,10 @@ func (s *Server) datasetView(ctx context.Context, collection string) operators.V
 func (s *Server) handleDatasetSetView(w http.ResponseWriter, r *http.Request) {
 	s.datasetEdit(w, r, func(ctx context.Context, c string) error {
 		return s.operators.SetView(ctx, c, operators.ViewConfig{
-			Type:    r.PostFormValue("type"),
-			GroupBy: r.PostFormValue("group_by"),
+			Type:     r.PostFormValue("type"),
+			GroupBy:  r.PostFormValue("group_by"),
+			ValueCol: r.PostFormValue("value_col"),
+			Agg:      r.PostFormValue("agg"),
 		})
 	})
 }
