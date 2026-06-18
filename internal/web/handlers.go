@@ -145,6 +145,7 @@ func (s *Server) Routes() http.Handler {
 
 	// Combine data sources: any authenticated user joins two sources by a key.
 	mux.Handle("GET /combine/new", authed(s.handleCombineNew))
+	mux.Handle("POST /combine/preview", authed(s.handleCombinePreview))
 	mux.Handle("POST /combine", authed(s.handleCombineCreate))
 	mux.Handle("POST /combine/{key}/delete", authed(s.handleCombineDelete))
 
@@ -777,11 +778,17 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 	var rows []dataset.Row
 	var err error
 	combined := false
+	var matchInfo string
 	if s.combine != nil {
 		if _, ok, _ := s.combine.Get(ctx, collection); ok {
 			combined = true
 			editMode = false
-			name, cols, rows, err = s.combine.Compute(ctx, collection)
+			var res combine.Result
+			res, err = s.combine.Compute(ctx, collection)
+			name, cols, rows = res.Name, res.Columns, res.Rows
+			if err == nil {
+				matchInfo = combineMatchInfo(res)
+			}
 		}
 	}
 	if !combined {
@@ -883,6 +890,7 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		"LiveConnector": !combined && (strings.HasPrefix(collection, "wx_") || strings.HasPrefix(collection, "api_")),
 		"ReadOnly":      combined,
 		"Combined":      combined,
+		"MatchInfo":     matchInfo,
 		"SavedViews":    vms,
 		"HasViews":      s.views != nil,
 		"ActiveView":    activeView,
@@ -1499,12 +1507,7 @@ func (s *Server) handleCombineCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	me := s.effectiveUser(r)
-	c, err := s.combine.Create(r.Context(), combine.Input{
-		Name:  r.PostFormValue("name"),
-		Owner: me,
-		Left:  combine.Member{Collection: r.PostFormValue("left"), Key: r.PostFormValue("left_key")},
-		Right: combine.Member{Collection: r.PostFormValue("right"), Key: r.PostFormValue("right_key")},
-	})
+	c, err := s.combine.Create(r.Context(), combineInputFromForm(r, me))
 	if err != nil {
 		http.Redirect(w, r, "/combine/new?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
@@ -1516,6 +1519,68 @@ func (s *Server) handleCombineCreate(w http.ResponseWriter, r *http.Request) {
 		_ = s.operators.Subscribe(r.Context(), c.Key, me) // creator auto-subscribes
 	}
 	http.Redirect(w, r, "/datasets/"+c.Key, http.StatusSeeOther)
+}
+
+// combineInputFromForm reads a combine spec from a posted form.
+func combineInputFromForm(r *http.Request, owner string) combine.Input {
+	return combine.Input{
+		Name:        r.PostFormValue("name"),
+		Owner:       owner,
+		Left:        combine.Member{Collection: r.PostFormValue("left"), Key: r.PostFormValue("left_key")},
+		Right:       combine.Member{Collection: r.PostFormValue("right"), Key: r.PostFormValue("right_key")},
+		OnlyMatched: r.PostFormValue("only_matched") == "on",
+	}
+}
+
+// combineMatchInfo renders a plain-language match summary for a join result.
+func combineMatchInfo(res combine.Result) string {
+	if res.Total == 0 {
+		return "The first source has no rows."
+	}
+	if res.Matched == 0 {
+		return fmt.Sprintf("⚠ 0 of %d rows matched — the key columns don't share any values. Matching ignores case and spacing; double-check you picked columns that hold the same thing.", res.Total)
+	}
+	if res.Unmatched == 0 {
+		return fmt.Sprintf("✓ all %d rows matched.", res.Total)
+	}
+	return fmt.Sprintf("✓ %d of %d rows matched; %d had no match (their second-source columns are blank).", res.Matched, res.Total, res.Unmatched)
+}
+
+// handleCombinePreview computes an unsaved join and returns match stats + a
+// sample of rows as JSON, powering the builder's live preview.
+func (s *Server) handleCombinePreview(w http.ResponseWriter, r *http.Request) {
+	if s.combine == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "combine not configured"})
+		return
+	}
+	_ = r.ParseForm()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	res, err := s.combine.Preview(ctx, combineInputFromForm(r, ""))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	sample := res.Rows
+	if len(sample) > 8 {
+		sample = sample[:8]
+	}
+	rows := make([][]string, 0, len(sample))
+	for _, row := range sample {
+		cells := make([]string, len(res.Columns))
+		for i, c := range res.Columns {
+			cells[i] = row.Fields[c]
+		}
+		rows = append(rows, cells)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"columns":   res.Columns,
+		"rows":      rows,
+		"matched":   res.Matched,
+		"unmatched": res.Unmatched,
+		"total":     res.Total,
+		"info":      combineMatchInfo(res),
+	})
 }
 
 // handleCombineDelete removes a combined source (and its registry entry).

@@ -2,45 +2,51 @@
 <div class="crumb"><a href="/catalog">← Data sources</a></div>
 <div class="page-head">
   <h1>Combine data sources</h1>
-  <p class="muted">Join two data sources on a shared key column. Every row of the first source is matched to the second by key (the second is used as a lookup — one row per key), producing a combined source you can filter and chart. Computed live, so it stays fresh.</p>
+  <p class="muted">Match rows from two sources by a column they share (the “key”) — like joining a roster to weather by <em>base</em>. Pick the sources and the matching column in each; the preview shows how many rows line up before you create it. Matching ignores case and spacing.</p>
 </div>
 
 {{if .Error}}<div class="banner err">{{.Error}}</div>{{end}}
 
 {{if .Sources}}
 <div class="card">
-  <form method="POST" action="/combine">
-    <div class="field"><label>Name</label><input type="text" name="name" placeholder="e.g. Pilots with base weather" required></div>
+  <form method="POST" action="/combine" id="combineForm">
+    <div class="field"><label>Name</label><input type="text" name="name" placeholder="e.g. Roster with base weather" required></div>
 
     <div class="grid2">
       <div>
-        <h2 style="font-size:.95rem;">First source (rows)</h2>
+        <h2 style="font-size:.95rem;">First source <span class="muted" style="font-weight:400;">(keeps all its rows)</span></h2>
         <div class="field"><label>Data source</label>
-          <select name="left" id="left" onchange="syncKeys()" required>
+          <select name="left" id="left" onchange="onSrc()" required>
             <option value="">— choose —</option>
             {{range .Sources}}<option value="{{.Collection}}">{{.Name}}</option>{{end}}
           </select>
         </div>
-        <div class="field"><label>Key column</label>
-          <select name="left_key" id="left_key" required><option value="">— choose a source first —</option></select>
+        <div class="field"><label>Match on column</label>
+          <select name="left_key" id="left_key" onchange="preview()" required><option value="">— choose a source first —</option></select>
         </div>
       </div>
       <div>
-        <h2 style="font-size:.95rem;">Second source (lookup)</h2>
+        <h2 style="font-size:.95rem;">Second source <span class="muted" style="font-weight:400;">(adds its columns)</span></h2>
         <div class="field"><label>Data source</label>
-          <select name="right" id="right" onchange="syncKeys()" required>
+          <select name="right" id="right" onchange="onSrc()" required>
             <option value="">— choose —</option>
             {{range .Sources}}<option value="{{.Collection}}">{{.Name}}</option>{{end}}
           </select>
         </div>
-        <div class="field"><label>Key column</label>
-          <select name="right_key" id="right_key" required><option value="">— choose a source first —</option></select>
+        <div class="field"><label>Match on column</label>
+          <select name="right_key" id="right_key" onchange="preview()" required><option value="">— choose a source first —</option></select>
         </div>
       </div>
     </div>
 
-    <p class="muted" style="font-size:.82rem;">Columns from the second source are added to each matched row (its key column is dropped; name clashes are prefixed with the source name). Unmatched first-source rows keep blank second-source columns.</p>
-    <button class="btn" type="submit">Create combined source</button>
+    <label class="check" style="margin:.2rem 0 1rem;"><input type="checkbox" name="only_matched" id="only_matched" onchange="preview()"> Only keep rows that have a match (drop unmatched rows)</label>
+
+    <div id="previewBox"></div>
+
+    <div style="margin-top:1rem; display:flex; gap:.6rem; align-items:center;">
+      <button class="btn" type="submit">Create combined source</button>
+      <span class="muted" style="font-size:.85rem;">Columns from the second source are added to each matched row; clashing names get the source-name prefix.</span>
+    </div>
   </form>
 </div>
 {{else}}
@@ -49,19 +55,48 @@
 
 <script>
   var COLS = {{.ColumnsJSON}};
-  function fill(selectId, cols, keep){
-    var sel = document.getElementById(selectId);
-    var cur = keep ? sel.value : '';
+  function fill(selectId, cols, want){
+    var sel = document.getElementById(selectId), cur = sel.value || want || '';
     sel.innerHTML = '<option value="">— choose a column —</option>';
     (cols||[]).forEach(function(c){
-      var o = document.createElement('option'); o.value = c; o.textContent = c;
+      var o = document.createElement('option'); o.value=c; o.textContent=c;
       if (c === cur) o.selected = true;
       sel.appendChild(o);
     });
   }
-  function syncKeys(){
-    fill('left_key', COLS[document.getElementById('left').value], true);
-    fill('right_key', COLS[document.getElementById('right').value], true);
+  // When a source changes, repopulate its key dropdown and auto-suggest a shared
+  // column name as the key in both (a common case for non-experts).
+  function onSrc(){
+    var lc = COLS[document.getElementById('left').value] || [];
+    var rc = COLS[document.getElementById('right').value] || [];
+    var shared = lc.find(function(c){ return rc.some(function(d){ return d.toLowerCase() === c.toLowerCase(); }); });
+    fill('left_key', lc, shared);
+    fill('right_key', rc, shared ? rc.find(function(d){ return d.toLowerCase() === shared.toLowerCase(); }) : '');
+    preview();
   }
+  async function preview(){
+    var box = document.getElementById('previewBox');
+    var l = document.getElementById('left').value, lk = document.getElementById('left_key').value;
+    var rt = document.getElementById('right').value, rk = document.getElementById('right_key').value;
+    if (!l || !lk || !rt || !rk){ box.innerHTML=''; return; }
+    box.innerHTML = '<p class="muted" style="font-size:.85rem;">Previewing…</p>';
+    var body = 'left='+encodeURIComponent(l)+'&left_key='+encodeURIComponent(lk)+'&right='+encodeURIComponent(rt)+'&right_key='+encodeURIComponent(rk)+'&only_matched='+(document.getElementById('only_matched').checked?'on':'');
+    try {
+      var resp = await fetch('/combine/preview', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body});
+      var d = await resp.json();
+      if (!resp.ok){ box.innerHTML = '<div class="banner err">'+escapeHtml(d.error||'preview failed')+'</div>'; return; }
+      var cls = d.matched === 0 ? 'warn' : 'ok';
+      var html = '<div class="banner '+cls+'">'+escapeHtml(d.info)+'</div>';
+      if (d.rows && d.rows.length){
+        html += '<div class="table-wrap"><table><thead><tr>';
+        d.columns.forEach(function(c){ html += '<th>'+escapeHtml(c)+'</th>'; });
+        html += '</tr></thead><tbody>';
+        d.rows.forEach(function(row){ html += '<tr>'; row.forEach(function(c){ html += '<td>'+escapeHtml(c)+'</td>'; }); html += '</tr>'; });
+        html += '</tbody></table></div><p class="muted" style="font-size:.8rem; margin:.3rem 0 0;">Preview of the first rows.</p>';
+      }
+      box.innerHTML = html;
+    } catch(e){ box.innerHTML = '<div class="banner err">preview failed: '+escapeHtml(''+e)+'</div>'; }
+  }
+  function escapeHtml(s){ var d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 </script>
 {{end}}

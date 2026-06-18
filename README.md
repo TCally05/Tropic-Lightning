@@ -144,7 +144,11 @@ to the admin's own identity.
 ### Combine data sources (join)
 
 Any user can **combine two data sources** into a virtual dataset by joining them
-on a shared key column (`/combine/new`). It's a **left join**: every row of the
+on a shared key column (`/combine/new`). The builder **auto-suggests** a shared
+key, shows a **live preview with a match count** ("✓ 42 of 50 rows matched") so
+you can tell immediately whether the keys line up, and offers an **only-keep-
+matched-rows** option. Key matching is **forgiving** — case- and
+whitespace-insensitive (so `Hill AFB` matches `hill afb`). It's a **left join**: every row of the
 first source is matched to the second by key (the second is used as a lookup —
 one row per key value; unmatched left rows keep blank right columns). Right
 columns that clash with a left column are prefixed with the right source's name.
@@ -271,7 +275,7 @@ cluster), not part of this package.
 
 ```bash
 # Build the image, then create the package (pulls the image from your daemon).
-docker build -t keycloak-portal:0.1.26 .
+docker build -t keycloak-portal:0.1.27 .
 zarf package create deploy/zarf --confirm
 
 # On the target cluster (must be `zarf init`-ed), deploy with your values:
@@ -304,7 +308,7 @@ and the UDS Operator takes over the wiring:
   node and Keycloak.
 
 ```bash
-docker build -t keycloak-portal:0.1.26 .
+docker build -t keycloak-portal:0.1.27 .
 zarf package create deploy/zarf --confirm --output deploy/zarf
 uds create deploy/uds --confirm
 uds deploy uds-bundle-keycloak-portal-*.tar.zst --confirm \

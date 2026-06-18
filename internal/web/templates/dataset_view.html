@@ -84,6 +84,7 @@
 </div>
 {{end}}
 {{if .LiveConnector}}<div class="banner info">This dataset is backed by a live connector — refreshing replaces the snapshot, so manual row edits are overwritten on refresh.</div>{{end}}
+{{if .Combined}}<div class="banner info">Combined source (read-only, computed live). {{.MatchInfo}}</div>{{end}}
 
 {{if eq .ViewType "wheel"}}
 <div class="card">
