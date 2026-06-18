@@ -1320,3 +1320,50 @@ func TestSavedViewsSwitch(t *testing.T) {
 		t.Error("Ready view should show only A")
 	}
 }
+
+func TestDatasetBarAndStats(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	_ = dstore.PutMeta(ctx, "ds_r", "Roster", []string{"base", "hrs"})
+	_ = dstore.PutRow(ctx, "ds_r", "r1", map[string]string{"base": "Hill", "hrs": "100"})
+	_ = dstore.PutRow(ctx, "ds_r", "r2", map[string]string{"base": "Hill", "hrs": "50"})
+	_ = dstore.PutRow(ctx, "ds_r", "r3", map[string]string{"base": "Ramstein", "hrs": "30"})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_r", "Roster", operators.KindGeneric, "ds_r")
+
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
+		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	h := srv.Routes()
+	tok := adminToken(t, kc)
+	get := func(target string) string {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+
+	// Bar chart: sum of hrs by base via per-view override params.
+	bar := get("/datasets/ds_r?vtype=bar&vgroup=base&vval=hrs&vagg=sum&view=x")
+	if !strings.Contains(bar, "sum of hrs by base") || !strings.Contains(bar, ">150<") || !strings.Contains(bar, ">30<") {
+		t.Errorf("bar chart should show summed hrs per base")
+	}
+	// Summary stats over hrs.
+	stats := get("/datasets/ds_r?vtype=stats&vval=hrs&view=x")
+	if !strings.Contains(stats, "SUM") || !strings.Contains(stats, ">180<") {
+		t.Errorf("stats should show SUM 180 (100+50+30)")
+	}
+	// Line chart renders an SVG.
+	line := get("/datasets/ds_r?vtype=line&vgroup=hrs&vval=hrs&vagg=max&view=x")
+	if !strings.Contains(line, "<polyline") {
+		t.Errorf("line chart should render an SVG polyline")
+	}
+}

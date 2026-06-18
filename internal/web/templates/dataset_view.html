@@ -50,11 +50,13 @@
       <input type="hidden" name="q" value="{{.FilterQuery}}">
       <input type="hidden" name="vtype" value="{{.ViewType}}">
       <input type="hidden" name="vgroup" value="{{.ViewGroupBy}}">
+      <input type="hidden" name="vval" value="{{.ViewValueCol}}">
+      <input type="hidden" name="vagg" value="{{.ViewAgg}}">
       <div class="field"><label>View name</label><input type="text" name="name" placeholder="e.g. Grounded at Hill AFB" required></div>
       <div class="field"><label class="check"><input type="checkbox" name="default"> Make default (auto-open)</label></div>
       <div class="field"><button class="btn sm" type="submit">Save view</button></div>
     </form>
-    <p class="muted" style="font-size:.8rem; margin:.4rem 0 0;">Captures the current filter and {{if eq .ViewType "wheel"}}status-wheel{{else}}table{{end}} display.</p>
+    <p class="muted" style="font-size:.8rem; margin:.4rem 0 0;">Captures the current filter and display (table, wheel, bar, line, or stats).</p>
   </div>
 
   {{if .SavedViews}}
@@ -80,8 +82,9 @@
 {{end}}
 {{if .LiveConnector}}<div class="banner info">This dataset is backed by a live connector — refreshing replaces the snapshot, so manual row edits are overwritten on refresh.</div>{{end}}
 
-{{if and (eq .ViewType "wheel") .WheelSegments}}
+{{if eq .ViewType "wheel"}}
 <div class="card">
+  {{if .WheelSegments}}
   <div style="display:flex; gap:2rem; align-items:center; flex-wrap:wrap;">
     <div style="width:170px; height:170px; border-radius:50%; position:relative; flex:none; background:{{.WheelGradient}};">
       <div style="position:absolute; inset:26%; background:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:1.3rem;">{{.Total}}</div>
@@ -102,6 +105,51 @@
       </table>
     </div>
   </div>
+  {{else}}<div class="empty">Pick a <strong>Category</strong> column below for the status wheel.</div>{{end}}
+</div>
+
+{{else if eq .ViewType "bar"}}
+<div class="card">
+  <h2 style="margin:0 0 .9rem;">{{.ViewAgg}}{{if .ViewValueCol}} of {{.ViewValueCol}}{{end}} by {{.ViewGroupBy}}</h2>
+  {{if .Bars}}
+    {{range .Bars}}
+    <div style="display:flex; align-items:center; gap:.6rem; margin:.28rem 0;">
+      <div style="width:10rem; text-align:right; font-size:.82rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{.Label}}">{{.Label}}</div>
+      <div style="flex:1; background:var(--bg); border-radius:5px;"><div style="width:{{.BarPct}}%; min-width:2px; background:{{.Color}}; height:1.15rem; border-radius:5px;"></div></div>
+      <div style="width:5rem; font-weight:700; font-size:.85rem;">{{.Display}}</div>
+    </div>
+    {{end}}
+  {{else}}<div class="empty">Pick a <strong>Category</strong> column below for the bar chart.</div>{{end}}
+</div>
+
+{{else if eq .ViewType "line"}}
+<div class="card">
+  <h2 style="margin:0 0 .9rem;">{{.ViewAgg}}{{if .ViewValueCol}} of {{.ViewValueCol}}{{end}} over {{.ViewGroupBy}}</h2>
+  {{if .HasLine}}
+  <svg viewBox="0 0 {{.Line.W}} {{.Line.H}}" preserveAspectRatio="none" style="width:100%; height:240px; overflow:visible;">
+    <polyline points="{{.Line.Polyline}}" fill="none" stroke="var(--accent)" stroke-width="2"/>
+    {{range .Line.Points}}<circle cx="{{.CX}}" cy="{{.CY}}" r="3" fill="var(--accent)"><title>{{.X}}: {{.YDisp}}</title></circle>{{end}}
+  </svg>
+  <div class="toolbar" style="font-size:.78rem; color:var(--muted); justify-content:space-between;">
+    <span>min {{.Line.YMin}} · max {{.Line.YMax}}</span>
+    <span>{{len .Line.Points}} points along {{.ViewGroupBy}}</span>
+  </div>
+  {{else}}<div class="empty">Pick a <strong>Category / X</strong> column below for the line chart.</div>{{end}}
+</div>
+
+{{else if eq .ViewType "stats"}}
+<div class="card">
+  <h2 style="margin:0 0 .9rem;">Summary{{if .ViewValueCol}} of {{.ViewValueCol}}{{end}}</h2>
+  <div class="grid2">
+    <div class="card tight" style="margin:0; text-align:center;"><div class="muted" style="font-size:.72rem; letter-spacing:.04em;">ROWS</div><div style="font-size:1.7rem; font-weight:800;">{{.Stats.Count}}</div></div>
+    {{if .ViewValueCol}}
+    <div class="card tight" style="margin:0; text-align:center;"><div class="muted" style="font-size:.72rem; letter-spacing:.04em;">SUM</div><div style="font-size:1.7rem; font-weight:800;">{{.Stats.Sum}}</div></div>
+    <div class="card tight" style="margin:0; text-align:center;"><div class="muted" style="font-size:.72rem; letter-spacing:.04em;">AVG</div><div style="font-size:1.7rem; font-weight:800;">{{.Stats.Avg}}</div></div>
+    <div class="card tight" style="margin:0; text-align:center;"><div class="muted" style="font-size:.72rem; letter-spacing:.04em;">MIN</div><div style="font-size:1.7rem; font-weight:800;">{{.Stats.Min}}</div></div>
+    <div class="card tight" style="margin:0; text-align:center;"><div class="muted" style="font-size:.72rem; letter-spacing:.04em;">MAX</div><div style="font-size:1.7rem; font-weight:800;">{{.Stats.Max}}</div></div>
+    {{end}}
+  </div>
+  {{if .ViewValueCol}}<p class="muted" style="font-size:.8rem; margin:.6rem 0 0;">{{.Stats.Numeric}} of {{.Stats.Count}} rows had a numeric {{.ViewValueCol}}.</p>{{else}}<p class="muted" style="font-size:.8rem; margin:.6rem 0 0;">Pick a numeric <strong>Value column</strong> below for sum / avg / min / max.</p>{{end}}
 </div>
 {{end}}
 
@@ -111,6 +159,8 @@
     {{/* keep the current display when filtering */}}
     <input type="hidden" name="vtype" value="{{.ViewType}}">
     <input type="hidden" name="vgroup" value="{{.ViewGroupBy}}">
+    <input type="hidden" name="vval" value="{{.ViewValueCol}}">
+    <input type="hidden" name="vagg" value="{{.ViewAgg}}">
     <div class="field"><label>Column</label>
       <select name="col" style="width:auto;"><option value="">—</option>{{$fc := .FilterCol}}{{range .Columns}}<option value="{{.}}" {{if eq $fc .}}selected{{end}}>{{.}}</option>{{end}}</select>
     </div>
@@ -122,16 +172,35 @@
 </details>
 
 <details class="card tight">
-  <summary style="cursor:pointer; font-weight:600;">Visualization <span class="muted" style="font-weight:400;">— currently {{if eq .ViewType "wheel"}}status wheel{{else}}table{{end}}</span></summary>
+  <summary style="cursor:pointer; font-weight:600;">Visualization <span class="muted" style="font-weight:400;">— currently {{if eq .ViewType "wheel"}}status wheel{{else if eq .ViewType "bar"}}bar chart{{else if eq .ViewType "line"}}line chart{{else if eq .ViewType "stats"}}summary stats{{else}}table{{end}}</span></summary>
   <form method="POST" action="/datasets/{{$coll}}/view?{{safeurl $bq}}" class="inline-fields" style="margin-top:1rem;">
     <div class="field"><label>View as</label>
-      <select name="type" style="width:auto;"><option value="table" {{if ne .ViewType "wheel"}}selected{{end}}>Table</option><option value="wheel" {{if eq .ViewType "wheel"}}selected{{end}}>Status wheel</option></select>
+      <select name="type" style="width:auto;">
+        <option value="table" {{if eq .ViewType "table"}}selected{{end}}>Table</option>
+        <option value="wheel" {{if eq .ViewType "wheel"}}selected{{end}}>Status wheel (pie)</option>
+        <option value="bar" {{if eq .ViewType "bar"}}selected{{end}}>Bar chart</option>
+        <option value="line" {{if eq .ViewType "line"}}selected{{end}}>Line chart</option>
+        <option value="stats" {{if eq .ViewType "stats"}}selected{{end}}>Summary stats</option>
+      </select>
     </div>
-    <div class="field"><label>Group by (for wheel)</label>
+    <div class="field"><label>Category / X column</label>
       <select name="group_by" style="width:auto;"><option value="">—</option>{{$gb := .ViewGroupBy}}{{range .Columns}}<option value="{{.}}" {{if eq $gb .}}selected{{end}}>{{.}}</option>{{end}}</select>
+    </div>
+    <div class="field"><label>Value column (number)</label>
+      <select name="value_col" style="width:auto;"><option value="">—</option>{{$vc := .ViewValueCol}}{{range .Columns}}<option value="{{.}}" {{if eq $vc .}}selected{{end}}>{{.}}</option>{{end}}</select>
+    </div>
+    <div class="field"><label>Aggregation</label>
+      <select name="agg" style="width:auto;">{{$ag := .ViewAgg}}
+        <option value="count" {{if eq $ag "count"}}selected{{end}}>count rows</option>
+        <option value="sum" {{if eq $ag "sum"}}selected{{end}}>sum</option>
+        <option value="avg" {{if eq $ag "avg"}}selected{{end}}>average</option>
+        <option value="min" {{if eq $ag "min"}}selected{{end}}>min</option>
+        <option value="max" {{if eq $ag "max"}}selected{{end}}>max</option>
+      </select>
     </div>
     <div class="field"><button class="btn" type="submit">Apply</button></div>
   </form>
+  <p class="muted" style="font-size:.8rem; margin:.5rem 0 0;">Wheel / bar / line group by the <strong>category</strong> column. Bar &amp; line aggregate the <strong>value column</strong> per category (or just count rows). Summary stats use the value column.</p>
 </details>
 
 <div class="card">

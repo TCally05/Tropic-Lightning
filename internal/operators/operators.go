@@ -27,8 +27,10 @@ type Operator struct {
 
 // ViewConfig is how a dataset is visualized (configurable per dataset).
 type ViewConfig struct {
-	Type    string `json:"type"`     // "table" (default) | "wheel"
-	GroupBy string `json:"group_by"` // column to group by for the wheel
+	Type     string `json:"type"`      // table (default) | wheel | bar | line | stats
+	GroupBy  string `json:"group_by"`  // category / x-axis column (wheel, bar, line)
+	ValueCol string `json:"value_col"` // numeric column to aggregate (bar, line, stats)
+	Agg      string `json:"agg"`       // count (default) | sum | avg | min | max
 }
 
 // Dataset is a registered dataset and the operators assigned to it.

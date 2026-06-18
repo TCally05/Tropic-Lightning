@@ -107,13 +107,22 @@ disables). Operators can also **Refresh now** from the dataset view.
 ### Per-dataset visualizations
 
 Each dataset chooses how it's rendered, set from the dataset view by admins or
-the assigned operator:
+the assigned operator. All charts are computed in Go and drawn with inline
+SVG/CSS — **no frontend dependencies, fully air-gap-native** — and honor the
+active filter:
 
 - **Table** (default) — the filterable/editable grid.
-- **Status wheel** — pick a column to group by; the rows are charted as a donut
-  with a legend (counts + percentages), honoring the active filter. This
-  generalizes the pilots readiness wheel to any dataset (weather condition,
-  status, base, …). View config is stored per dataset in the operator registry.
+- **Status wheel (pie)** — group by a column; donut + legend (counts + %).
+- **Bar chart** — group by a column and either count rows or aggregate a numeric
+  column (sum/avg/min/max) per category.
+- **Line chart** — a numeric aggregate over a sorted (numeric or lexical) x-axis
+  column, drawn as an SVG polyline.
+- **Summary stats** — count / sum / avg / min / max of a numeric column as KPI
+  cards.
+
+The config is `{type, group_by (category/x), value_col (number), agg}`, stored
+per dataset in the operator registry and captured by saved views (so a view can
+pin a specific chart). Chart math lives in `internal/web/charts.go`.
 
 ### Saved views
 
@@ -232,7 +241,7 @@ cluster), not part of this package.
 
 ```bash
 # Build the image, then create the package (pulls the image from your daemon).
-docker build -t keycloak-portal:0.1.18 .
+docker build -t keycloak-portal:0.1.20 .
 zarf package create deploy/zarf --confirm
 
 # On the target cluster (must be `zarf init`-ed), deploy with your values:
@@ -265,7 +274,7 @@ and the UDS Operator takes over the wiring:
   node and Keycloak.
 
 ```bash
-docker build -t keycloak-portal:0.1.18 .
+docker build -t keycloak-portal:0.1.20 .
 zarf package create deploy/zarf --confirm --output deploy/zarf
 uds create deploy/uds --confirm
 uds deploy uds-bundle-keycloak-portal-*.tar.zst --confirm \
