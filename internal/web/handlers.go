@@ -24,9 +24,9 @@ import (
 	"github.com/defenseunicorns/keycloak-portal/internal/config"
 	"github.com/defenseunicorns/keycloak-portal/internal/dataset"
 	"github.com/defenseunicorns/keycloak-portal/internal/datasource"
+	"github.com/defenseunicorns/keycloak-portal/internal/deck"
 	"github.com/defenseunicorns/keycloak-portal/internal/httpsource"
 	"github.com/defenseunicorns/keycloak-portal/internal/operators"
-	"github.com/defenseunicorns/keycloak-portal/internal/pilots"
 	"github.com/defenseunicorns/keycloak-portal/internal/views"
 	"github.com/defenseunicorns/keycloak-portal/internal/weather"
 )
@@ -39,6 +39,7 @@ const (
 	nonceCookie    = "oidc_nonce"
 	idTokenCookie  = "id_token"  // kept only as a logout hint
 	returnToCookie = "return_to" // page to return to after login
+	viewAsCookie   = "view_as"   // admin "viewing as" persona (username)
 )
 
 // Server holds the dependencies shared by the HTTP handlers.
@@ -47,18 +48,18 @@ type Server struct {
 	cfg         *config.Config
 	templates   *template.Template
 	dataSources *datasource.Service
-	pilots      *pilots.Service
 	datasets    *dataset.Service
 	operators   *operators.Service
 	weather     *weather.Service
 	httpsource  *httpsource.Service
 	views       *views.Service
 	combine     *combine.Service
+	deck        *deck.Service
 }
 
 // NewServer parses templates and returns a Server ready to register routes.
 // weather and httpsrc may be nil (no live connectors configured).
-func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Service, pl *pilots.Service, dsets *dataset.Service, ops *operators.Service, wx *weather.Service, httpsrc *httpsource.Service, vw *views.Service, cmb *combine.Service) (*Server, error) {
+func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Service, dsets *dataset.Service, ops *operators.Service, wx *weather.Service, httpsrc *httpsource.Service, vw *views.Service, cmb *combine.Service, dk *deck.Service) (*Server, error) {
 	// tmpl is captured by the partial func below; assigned after parsing so the
 	// shared layout can render a page's content block by name.
 	var tmpl *template.Template
@@ -82,7 +83,7 @@ func NewServer(authn *auth.Authenticator, cfg *config.Config, ds *datasource.Ser
 		return nil, err
 	}
 	tmpl = t
-	return &Server{auth: authn, cfg: cfg, templates: t, dataSources: ds, pilots: pl, datasets: dsets, operators: ops, weather: wx, httpsource: httpsrc, views: vw, combine: cmb}, nil
+	return &Server{auth: authn, cfg: cfg, templates: t, dataSources: ds, datasets: dsets, operators: ops, weather: wx, httpsource: httpsrc, views: vw, combine: cmb, deck: dk}, nil
 }
 
 // Routes wires up the HTTP routes and middleware, returning the root handler.
@@ -134,11 +135,6 @@ func (s *Server) Routes() http.Handler {
 	// Generic HTTP/JSON connector: admin configures URL + record path + auth.
 	mux.Handle("POST /datasources/http", admin(s.handleHTTPSourceCreate))
 
-	// Pilots import/manage (admin-only).
-	mux.Handle("GET /pilots", admin(s.handlePilotsPage))
-	mux.Handle("POST /pilots/import", admin(s.handlePilotsImport))
-	mux.Handle("GET /api/pilots", admin(s.handlePilotsList))
-
 	// Operators registry (admin-only) — used for the dashboard "view as" preview.
 	mux.Handle("GET /operators", admin(s.handleOperatorsPage))
 	mux.Handle("POST /operators", admin(s.handleOperatorCreate))
@@ -146,11 +142,21 @@ func (s *Server) Routes() http.Handler {
 
 	// Data-source catalog: any authenticated user browses and self-subscribes.
 	mux.Handle("GET /catalog", authed(s.handleCatalogPage))
+	mux.Handle("POST /catalog/sync", authed(s.handleCatalogSync))
 	mux.Handle("POST /catalog/{key}/subscribe", authed(s.handleSubscribe))
 	mux.Handle("POST /catalog/{key}/unsubscribe", authed(s.handleUnsubscribe))
 
+	// Meeting decks: publish filtered visuals to a shared space.
+	mux.Handle("GET /decks", authed(s.handleDecksPage))
+	mux.Handle("POST /decks", authed(s.handleDeckCreate))
+	mux.Handle("GET /decks/{id}", authed(s.handleDeckView))
+	mux.Handle("POST /decks/{id}/delete", authed(s.handleDeckDelete))
+	mux.Handle("POST /decks/{id}/slides/{sid}/delete", authed(s.handleSlideDelete))
+	mux.Handle("POST /datasets/{collection}/publish", authed(s.handlePublish))
+
 	// Combine data sources: any authenticated user joins two sources by a key.
 	mux.Handle("GET /combine/new", authed(s.handleCombineNew))
+	mux.Handle("POST /combine/preview", authed(s.handleCombinePreview))
 	mux.Handle("POST /combine", authed(s.handleCombineCreate))
 	mux.Handle("POST /combine/{key}/delete", authed(s.handleCombineDelete))
 
@@ -171,9 +177,6 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /datasets/{collection}/views", authed(s.handleViewSave))
 	mux.Handle("POST /datasets/{collection}/views/{id}/delete", authed(s.handleViewDelete))
 	mux.Handle("POST /datasets/{collection}/views/{id}/default", authed(s.handleViewSetDefault))
-	mux.Handle("GET /missions", authed(s.handleMissions))
-	mux.Handle("POST /pilots/{id}/status", authed(s.handlePilotStatus))
-	mux.Handle("GET /api/missions/summary", authed(s.handleMissionsSummary))
 
 	return logging(mux)
 }
@@ -316,21 +319,43 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// polls /api/peat/status to keep it live).
 	peat, connected := s.peatStatus(r.Context())
 
-	// Persona view: admins can preview the operator view, and may preview a
-	// *specific* operator's assignments via ?view=operator&as=<username>.
+	// Persona view: admins can preview a specific operator's view. The choice is
+	// remembered in a cookie so it persists across pages (catalog, datasets) —
+	// see previewUser. ?view=admin clears it; ?view=operator&as=<user> sets it.
 	isAdmin := s.auth.IsAdmin(claims)
+	self := s.operatorName(claims)
 	view := "operator"
-	previewAs := s.operatorName(claims) // default: the current user
+	previewAs := self
 	var opList []operators.Operator
 	if isAdmin {
-		view = "admin"
-		if r.URL.Query().Get("view") == "operator" {
+		opList, _ = s.operators.ListOperators(r.Context())
+		q := r.URL.Query()
+		switch {
+		case q.Get("view") == "operator":
 			view = "operator"
-			if as := r.URL.Query().Get("as"); as != "" {
+			as := q.Get("as")
+			if as == "" {
+				if c, err := r.Cookie(viewAsCookie); err == nil {
+					as = c.Value
+				}
+			}
+			if as != "" && as != self {
 				previewAs = as
+				s.setCookie(w, viewAsCookie, as, 8*time.Hour)
+			} else {
+				previewAs = self // preview own operator view (no persona)
+			}
+		case q.Get("view") == "admin":
+			view = "admin"
+			s.clearCookie(w, viewAsCookie)
+		default:
+			// No explicit choice: honor an active persona cookie if present.
+			if c, err := r.Cookie(viewAsCookie); err == nil && c.Value != "" && c.Value != self {
+				view, previewAs = "operator", c.Value
+			} else {
+				view = "admin"
 			}
 		}
-		opList, _ = s.operators.ListOperators(r.Context())
 	}
 
 	// Datasets assigned to the previewed user (the operator view's "Your datasets").
@@ -730,7 +755,7 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	owner := s.operatorName(claimsOf(r))
+	owner := s.effectiveUser(r)
 	qry := r.URL.Query()
 	col := qry.Get("col")
 	val := qry.Get("val")
@@ -764,11 +789,17 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 	var rows []dataset.Row
 	var err error
 	combined := false
+	var matchInfo string
 	if s.combine != nil {
 		if _, ok, _ := s.combine.Get(ctx, collection); ok {
 			combined = true
 			editMode = false
-			name, cols, rows, err = s.combine.Compute(ctx, collection)
+			var res combine.Result
+			res, err = s.combine.Compute(ctx, collection)
+			name, cols, rows = res.Name, res.Columns, res.Rows
+			if err == nil {
+				matchInfo = combineMatchInfo(res)
+			}
 		}
 	}
 	if !combined {
@@ -791,8 +822,8 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 	}
 
 	shown := filtered
-	if len(shown) > pilotsDisplayLimit {
-		shown = shown[:pilotsDisplayLimit]
+	if len(shown) > datasetDisplayLimit {
+		shown = shown[:datasetDisplayLimit]
 	}
 
 	// Effective visualization: a saved view's override (v* params in the URL)
@@ -870,10 +901,22 @@ func (s *Server) handleDatasetView(w http.ResponseWriter, r *http.Request) {
 		"LiveConnector": !combined && (strings.HasPrefix(collection, "wx_") || strings.HasPrefix(collection, "api_")),
 		"ReadOnly":      combined,
 		"Combined":      combined,
+		"MatchInfo":     matchInfo,
 		"SavedViews":    vms,
 		"HasViews":      s.views != nil,
 		"ActiveView":    activeView,
+		"CanPublish":    s.deck != nil,
+		"Decks":         s.decksFor(ctx),
 	})
+}
+
+// decksFor lists decks for the publish control (nil-safe; empty on error).
+func (s *Server) decksFor(ctx context.Context) []deck.Deck {
+	if s.deck == nil {
+		return nil
+	}
+	decks, _ := s.deck.ListDecks(ctx)
+	return decks
 }
 
 // viewQuery encodes a saved view as the querystring that re-applies it.
@@ -918,7 +961,7 @@ func (s *Server) handleViewSave(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	v := views.View{
-		Owner:      s.operatorName(claimsOf(r)),
+		Owner:      s.effectiveUser(r),
 		Collection: collection,
 		Name:       r.PostFormValue("name"),
 		Default:    r.PostFormValue("default") == "on",
@@ -947,7 +990,7 @@ func (s *Server) handleViewDelete(w http.ResponseWriter, r *http.Request) {
 		s.forbidden(w, r)
 		return
 	}
-	if err := s.views.Delete(r.Context(), s.operatorName(claimsOf(r)), r.PathValue("id")); err != nil && !errors.Is(err, views.ErrNotFound) {
+	if err := s.views.Delete(r.Context(), s.effectiveUser(r), r.PathValue("id")); err != nil && !errors.Is(err, views.ErrNotFound) {
 		http.Redirect(w, r, "/datasets/"+collection+"?view=none&error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
@@ -963,7 +1006,7 @@ func (s *Server) handleViewSetDefault(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	owner := s.operatorName(claimsOf(r))
+	owner := s.effectiveUser(r)
 	id := r.PathValue("id")
 	var err error
 	if r.PostFormValue("default") == "off" {
@@ -1252,6 +1295,29 @@ func (s *Server) operatorName(claims *auth.Claims) string {
 	return firstNonEmpty(claims.PreferredUsername, claims.Subject)
 }
 
+// previewUser returns the identity to act "as": the admin's active "viewing as"
+// persona (from the view_as cookie) when set, otherwise the caller's own
+// username. persona is true when impersonating someone else. While a persona is
+// active, the admin impersonates that user — per-user actions (subscribe, saved
+// views, combine ownership) apply to them, not to the admin.
+func (s *Server) previewUser(r *http.Request) (user string, persona bool) {
+	claims, _ := auth.ClaimsFromContext(r.Context())
+	self := s.operatorName(claims)
+	if claims != nil && s.auth.IsAdmin(claims) {
+		if c, err := r.Cookie(viewAsCookie); err == nil && c.Value != "" && c.Value != self {
+			return c.Value, true
+		}
+	}
+	return self, false
+}
+
+// effectiveUser is the identity per-user actions apply to: the impersonated
+// persona when active, else the caller.
+func (s *Server) effectiveUser(r *http.Request) string {
+	u, _ := s.previewUser(r)
+	return u
+}
+
 // canAccessDataset is true for admins, or operators the dataset is assigned to.
 func (s *Server) canAccessDataset(r *http.Request, key string) bool {
 	claims, _ := auth.ClaimsFromContext(r.Context())
@@ -1273,40 +1339,64 @@ func (s *Server) forbidden(w http.ResponseWriter, r *http.Request) {
 
 // --- operators & assignments (admin only) ---
 
-// reconcileDatasets ensures the assignment registry contains the pilots dataset
-// and every uploaded dataset present in the data-source catalog (dataset://
-// entries), so they all show up as assignable. Idempotent; preserves existing
-// assignments.
-func (s *Server) reconcileDatasets(ctx context.Context) {
-	if err := s.operators.RegisterDataset(ctx, "pilots", "USAF Pilots", operators.KindPilots, "pilots"); err != nil {
-		slog.Warn("reconcile pilots dataset", "err", err)
-	}
-	sources, err := s.dataSources.List(ctx)
-	if err != nil {
-		slog.Warn("reconcile: list data sources", "err", err)
-		return
-	}
-	for _, d := range sources {
-		if c, ok := strings.CutPrefix(d.Endpoint, "dataset://"); ok && c != "" {
-			if err := s.operators.RegisterDataset(ctx, c, d.Name, operators.KindGeneric, c); err != nil {
-				slog.Warn("reconcile dataset", "collection", c, "err", err)
-			}
+// reconcileDatasets registers every dataset known to the node into the catalog:
+// data sources from the synced `data_sources` collection (read via the peat
+// document API — so sources created on a peer and synced in are picked up) and
+// combined sources. For dataset-backed sources it confirms the dataset's data
+// actually arrived (GetDocument __meta__) before surfacing it, so users don't
+// subscribe to a reference whose rows haven't synced yet. Idempotent; preserves
+// subscriptions. Returns the count of *newly* registered datasets.
+func (s *Server) reconcileDatasets(ctx context.Context) int {
+	// Drop the legacy "pilots" demo dataset if it lingers from older versions.
+	_ = s.operators.DeleteDataset(ctx, "pilots")
+
+	known := map[string]bool{}
+	if existing, err := s.operators.ListDatasets(ctx); err == nil {
+		for _, d := range existing {
+			known[d.Key] = true
 		}
 	}
-	// Combined sources are virtual datasets; register them so they're listed and
-	// subscribable in the catalog.
-	if s.combine != nil {
-		combos, err := s.combine.List(ctx)
-		if err != nil {
-			slog.Warn("reconcile: list combined sources", "err", err)
+	added := 0
+	register := func(key, name, kind, coll string) {
+		fresh := !known[key]
+		if err := s.operators.RegisterDataset(ctx, key, name, kind, coll); err != nil {
+			slog.Warn("reconcile register", "key", key, "err", err)
 			return
 		}
-		for _, c := range combos {
-			if err := s.operators.RegisterDataset(ctx, c.Key, c.Name, operators.KindCombined, c.Key); err != nil {
-				slog.Warn("reconcile combined source", "key", c.Key, "err", err)
-			}
+		if fresh {
+			known[key] = true
+			added++
 		}
 	}
+
+	// Data sources live as documents in the synced `data_sources` collection;
+	// surface each dataset-backed one whose dataset has actually landed locally.
+	if sources, err := s.dataSources.List(ctx); err == nil {
+		for _, d := range sources {
+			c, ok := strings.CutPrefix(d.Endpoint, "dataset://")
+			if !ok || c == "" {
+				continue
+			}
+			if !s.datasets.Exists(ctx, c) {
+				continue // referenced, but its data hasn't synced in yet
+			}
+			register(c, d.Name, operators.KindGeneric, c)
+		}
+	} else {
+		slog.Warn("reconcile: list data sources", "err", err)
+	}
+
+	// Combined sources are virtual datasets (their spec syncs via combined_sources).
+	if s.combine != nil {
+		if combos, err := s.combine.List(ctx); err == nil {
+			for _, c := range combos {
+				register(c.Key, c.Name, operators.KindCombined, c.Key)
+			}
+		} else {
+			slog.Warn("reconcile: list combined sources", "err", err)
+		}
+	}
+	return added
 }
 
 func (s *Server) handleOperatorsPage(w http.ResponseWriter, r *http.Request) {
@@ -1347,7 +1437,9 @@ func (s *Server) handleOperatorDelete(w http.ResponseWriter, r *http.Request) {
 // control. Subscribing is what grants the user access to view the data.
 func (s *Server) handleCatalogPage(w http.ResponseWriter, r *http.Request) {
 	s.reconcileDatasets(r.Context()) // ensure pilots + uploaded/live datasets are listed
-	me := s.operatorName(claimsOf(r))
+	// Reflect the admin's "viewing as" persona when one is active, so previewing
+	// the catalog shows the assumed user's subscriptions (read-only).
+	me, preview := s.previewUser(r)
 	sets, err := s.operators.ListDatasets(r.Context())
 	if err != nil {
 		http.Error(w, "failed to list data sources: "+err.Error(), http.StatusInternalServerError)
@@ -1362,9 +1454,6 @@ func (s *Server) handleCatalogPage(w http.ResponseWriter, r *http.Request) {
 	subscribed := 0
 	for _, d := range sets {
 		open := "/datasets/" + d.Collection
-		if d.Kind == operators.KindPilots {
-			open = "/missions"
-		}
 		sub := d.AssignedToUser(me)
 		if sub {
 			subscribed++
@@ -1378,12 +1467,21 @@ func (s *Server) handleCatalogPage(w http.ResponseWriter, r *http.Request) {
 		"Items":      items,
 		"MineCount":  subscribed,
 		"TotalCount": len(items),
+		"Preview":    preview, // previewing another user: show their subs, hide actions
 		"Error":      r.URL.Query().Get("error"),
+		"Synced":     r.URL.Query().Get("synced"),
 	})
 }
 
+// handleCatalogSync runs discovery on demand: surface any dataset collections in
+// the peat node (incl. mesh-synced) that aren't in the catalog yet.
+func (s *Server) handleCatalogSync(w http.ResponseWriter, r *http.Request) {
+	added := s.reconcileDatasets(r.Context())
+	http.Redirect(w, r, "/catalog?synced="+strconv.Itoa(added), http.StatusSeeOther)
+}
+
 func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
-	me := s.operatorName(claimsOf(r))
+	me := s.effectiveUser(r)
 	if me == "" {
 		s.forbidden(w, r)
 		return
@@ -1396,7 +1494,7 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUnsubscribe(w http.ResponseWriter, r *http.Request) {
-	me := s.operatorName(claimsOf(r))
+	me := s.effectiveUser(r)
 	if me == "" {
 		s.forbidden(w, r)
 		return
@@ -1464,13 +1562,8 @@ func (s *Server) handleCombineCreate(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/combine/new?error="+url.QueryEscape("invalid form"), http.StatusSeeOther)
 		return
 	}
-	me := s.operatorName(claimsOf(r))
-	c, err := s.combine.Create(r.Context(), combine.Input{
-		Name:  r.PostFormValue("name"),
-		Owner: me,
-		Left:  combine.Member{Collection: r.PostFormValue("left"), Key: r.PostFormValue("left_key")},
-		Right: combine.Member{Collection: r.PostFormValue("right"), Key: r.PostFormValue("right_key")},
-	})
+	me := s.effectiveUser(r)
+	c, err := s.combine.Create(r.Context(), combineInputFromForm(r, me))
 	if err != nil {
 		http.Redirect(w, r, "/combine/new?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
@@ -1484,6 +1577,68 @@ func (s *Server) handleCombineCreate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/datasets/"+c.Key, http.StatusSeeOther)
 }
 
+// combineInputFromForm reads a combine spec from a posted form.
+func combineInputFromForm(r *http.Request, owner string) combine.Input {
+	return combine.Input{
+		Name:        r.PostFormValue("name"),
+		Owner:       owner,
+		Left:        combine.Member{Collection: r.PostFormValue("left"), Key: r.PostFormValue("left_key")},
+		Right:       combine.Member{Collection: r.PostFormValue("right"), Key: r.PostFormValue("right_key")},
+		OnlyMatched: r.PostFormValue("only_matched") == "on",
+	}
+}
+
+// combineMatchInfo renders a plain-language match summary for a join result.
+func combineMatchInfo(res combine.Result) string {
+	if res.Total == 0 {
+		return "The first source has no rows."
+	}
+	if res.Matched == 0 {
+		return fmt.Sprintf("⚠ 0 of %d rows matched — the key columns don't share any values. Matching ignores case and spacing; double-check you picked columns that hold the same thing.", res.Total)
+	}
+	if res.Unmatched == 0 {
+		return fmt.Sprintf("✓ all %d rows matched.", res.Total)
+	}
+	return fmt.Sprintf("✓ %d of %d rows matched; %d had no match (their second-source columns are blank).", res.Matched, res.Total, res.Unmatched)
+}
+
+// handleCombinePreview computes an unsaved join and returns match stats + a
+// sample of rows as JSON, powering the builder's live preview.
+func (s *Server) handleCombinePreview(w http.ResponseWriter, r *http.Request) {
+	if s.combine == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "combine not configured"})
+		return
+	}
+	_ = r.ParseForm()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	res, err := s.combine.Preview(ctx, combineInputFromForm(r, ""))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	sample := res.Rows
+	if len(sample) > 8 {
+		sample = sample[:8]
+	}
+	rows := make([][]string, 0, len(sample))
+	for _, row := range sample {
+		cells := make([]string, len(res.Columns))
+		for i, c := range res.Columns {
+			cells[i] = row.Fields[c]
+		}
+		rows = append(rows, cells)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"columns":   res.Columns,
+		"rows":      rows,
+		"matched":   res.Matched,
+		"unmatched": res.Unmatched,
+		"total":     res.Total,
+		"info":      combineMatchInfo(res),
+	})
+}
+
 // handleCombineDelete removes a combined source (and its registry entry).
 func (s *Server) handleCombineDelete(w http.ResponseWriter, r *http.Request) {
 	if s.combine == nil {
@@ -1495,177 +1650,224 @@ func (s *Server) handleCombineDelete(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/catalog?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
+	// Also drop the catalog/registry entry (and its subscriptions); otherwise the
+	// combined source keeps showing after its spec is gone.
+	if err := s.operators.DeleteDataset(r.Context(), key); err != nil {
+		slog.Warn("delete combined registry entry", "key", key, "err", err)
+	}
 	http.Redirect(w, r, "/catalog", http.StatusSeeOther)
 }
 
-// --- pilots dataset (admin only) ---
+// datasetDisplayLimit caps how many rows the dataset table renders at once.
+const datasetDisplayLimit = 200
 
-// pilotsDisplayLimit caps how many rows the HTML table renders (the full set is
-// still ingested and available via /api/pilots).
-const pilotsDisplayLimit = 200
+// --- meeting decks: publish visuals to a shared space ---
 
-// handlePilotsPage shows the imported pilots with an Import button and mesh status.
-func (s *Server) handlePilotsPage(w http.ResponseWriter, r *http.Request) {
-	all, err := s.pilots.List(r.Context())
+// deckPanelLimit caps table rows rendered per slide so a deck page stays light.
+const deckPanelLimit = 100
+
+// panel is a rendered visual (chart or table) for a slide's live spec.
+type panel struct {
+	Title, By, At   string
+	SlideID, DeckID string
+	Name            string
+	Columns         []string
+	Rows            []dataset.Row
+	Total, Shown    int
+	ViewType        string
+	ViewGroupBy     string
+	ViewValueCol    string
+	ViewAgg         string
+	WheelSegments   []wheelSegment
+	WheelGradient   template.CSS
+	Bars            []barVM
+	Stats           statsVM
+	Line            lineVM
+	HasLine         bool
+	Err             string
+}
+
+// loadDataset reads a dataset's name/columns/rows, transparently computing a
+// combined source if the collection is one.
+func (s *Server) loadDataset(ctx context.Context, collection string) (string, []string, []dataset.Row, error) {
+	if s.combine != nil {
+		if _, ok, _ := s.combine.Get(ctx, collection); ok {
+			res, err := s.combine.Compute(ctx, collection)
+			return res.Name, res.Columns, res.Rows, err
+		}
+	}
+	return s.datasets.View(ctx, collection)
+}
+
+// renderSlidePanel re-computes a slide's visual from its live spec. A missing
+// source yields a panel with Err set rather than failing the whole deck.
+func (s *Server) renderSlidePanel(ctx context.Context, sl deck.Slide) panel {
+	p := panel{
+		Title: sl.Title, By: sl.PublishedBy, At: sl.PublishedAt, SlideID: sl.ID, DeckID: sl.DeckID,
+		ViewType: sl.ViewType, ViewGroupBy: sl.GroupBy, ViewValueCol: sl.ValueCol, ViewAgg: firstNonEmpty(sl.Agg, "count"),
+	}
+	name, cols, rows, err := s.loadDataset(ctx, sl.Collection)
 	if err != nil {
-		http.Error(w, "failed to list pilots: "+err.Error(), http.StatusInternalServerError)
+		p.Name = firstNonEmpty(sl.DatasetName, sl.Collection)
+		p.Err = "source unavailable"
+		return p
+	}
+	p.Name, p.Columns = name, cols
+	filtered := rows
+	if (sl.FilterCol != "" && sl.FilterVal != "") || sl.Query != "" {
+		filtered = filtered[:0:0]
+		for _, row := range rows {
+			if rowMatches(row.Fields, sl.FilterCol, sl.FilterVal, sl.Query) {
+				filtered = append(filtered, row)
+			}
+		}
+	}
+	p.Total = len(filtered)
+	shown := filtered
+	if len(shown) > deckPanelLimit {
+		shown = shown[:deckPanelLimit]
+	}
+	p.Rows, p.Shown = shown, len(shown)
+	switch p.ViewType {
+	case "wheel":
+		if p.ViewGroupBy != "" {
+			p.WheelSegments, p.WheelGradient = computeWheel(filtered, p.ViewGroupBy)
+		}
+	case "bar":
+		p.Bars = computeBars(filtered, p.ViewGroupBy, p.ViewValueCol, p.ViewAgg)
+	case "line":
+		p.Line, p.HasLine = computeLine(filtered, p.ViewGroupBy, p.ViewValueCol, p.ViewAgg)
+	case "stats":
+		p.Stats = computeStats(filtered, p.ViewValueCol)
+	}
+	return p
+}
+
+// handleDecksPage lists all decks (any authenticated user) with a create form.
+func (s *Server) handleDecksPage(w http.ResponseWriter, r *http.Request) {
+	if s.deck == nil {
+		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
-	shown := all
-	if len(shown) > pilotsDisplayLimit {
-		shown = shown[:pilotsDisplayLimit]
+	decks, err := s.deck.ListDecks(r.Context())
+	if err != nil {
+		http.Error(w, "failed to list decks: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
-	_, connected := s.peatStatus(r.Context())
-	s.render(w, r, "pilots.html", "USAF pilots", "pilots", map[string]any{
-		"Pilots":        shown,
-		"Total":         len(all),
-		"Shown":         len(shown),
-		"Limit":         pilotsDisplayLimit,
-		"Imported":      r.URL.Query().Get("imported"),
-		"Error":         r.URL.Query().Get("error"),
-		"PeatConnected": connected,
+	s.render(w, r, "decks.html", "Decks", "decks", map[string]any{
+		"Decks": decks,
+		"Error": r.URL.Query().Get("error"),
 	})
 }
 
-// handlePilotsImport ingests the embedded dataset into peat, then redirects back.
-func (s *Server) handlePilotsImport(w http.ResponseWriter, r *http.Request) {
-	// Bound the bulk write so a slow/unreachable node doesn't hang the request.
-	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
-	defer cancel()
-	n, err := s.pilots.Import(ctx)
+func (s *Server) handleDeckCreate(w http.ResponseWriter, r *http.Request) {
+	if s.deck == nil {
+		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
+		return
+	}
+	_ = r.ParseForm()
+	d, err := s.deck.CreateDeck(r.Context(), r.PostFormValue("name"), s.effectiveUser(r))
 	if err != nil {
-		http.Redirect(w, r, "/pilots?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+		http.Redirect(w, r, "/decks?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 		return
 	}
-	if err := s.operators.RegisterDataset(ctx, "pilots", "USAF Pilots", operators.KindPilots, "pilots"); err != nil {
-		slog.Warn("register pilots dataset", "err", err)
-	}
-	http.Redirect(w, r, "/pilots?imported="+strconv.Itoa(n), http.StatusSeeOther)
+	http.Redirect(w, r, "/decks/"+d.ID, http.StatusSeeOther)
 }
 
-// handlePilotsList is the JSON API listing of ingested pilots.
-func (s *Server) handlePilotsList(w http.ResponseWriter, r *http.Request) {
-	all, err := s.pilots.List(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if all == nil {
-		all = []pilots.Pilot{}
-	}
-	writeJSON(w, http.StatusOK, all)
-}
-
-// --- mission readiness (operator: any authenticated user) ---
-
-// handleMissions renders the operator view: a readiness status wheel plus an
-// editable pilot list (mark grounded/available).
-func (s *Server) handleMissions(w http.ResponseWriter, r *http.Request) {
-	if !s.canAccessDataset(r, "pilots") {
-		s.forbidden(w, r)
-		return
-	}
-	f := missionFilter(r)
-	res, err := s.pilots.Browse(r.Context(), f)
-	if err != nil {
-		http.Error(w, "failed to query pilots: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	shown := res.Pilots
-	if len(shown) > pilotsDisplayLimit {
-		shown = shown[:pilotsDisplayLimit]
-	}
-	s.render(w, r, "missions.html", "Mission readiness", "missions", map[string]any{
-		"Summary":      res.Summary,
-		"AvailPct":     res.Summary.AvailablePct(),
-		"GrandTotal":   res.GrandTotal,
-		"Facets":       res.Facets,
-		"Filter":       f,
-		"FilterActive": f.Active(),
-		"FilterQuery":  missionFilterQuery(f), // for preserving filters on edit
-		"Pilots":       shown,
-		"Shown":        len(shown),
-		"Updated":      r.URL.Query().Get("updated"),
-		"Error":        r.URL.Query().Get("error"),
-	})
-}
-
-// missionFilter reads the filter from the URL query. The edit form carries the
-// active filter in its action URL (not the body), so the body's "status" field
-// — the new mission status — never collides with the filter's "status".
-func missionFilter(r *http.Request) pilots.Filter {
-	q := r.URL.Query()
-	return pilots.Filter{
-		Base:     q.Get("base"),
-		Aircraft: q.Get("aircraft"),
-		Rank:     q.Get("rank"),
-		Status:   q.Get("status"),
-		Query:    q.Get("q"),
-	}
-}
-
-// missionFilterQuery encodes a filter as a URL query string (for redirects).
-func missionFilterQuery(f pilots.Filter) string {
-	v := url.Values{}
-	if f.Base != "" {
-		v.Set("base", f.Base)
-	}
-	if f.Aircraft != "" {
-		v.Set("aircraft", f.Aircraft)
-	}
-	if f.Rank != "" {
-		v.Set("rank", f.Rank)
-	}
-	if f.Status != "" {
-		v.Set("status", f.Status)
-	}
-	if f.Query != "" {
-		v.Set("q", f.Query)
-	}
-	return v.Encode()
-}
-
-// handlePilotStatus is the operator edit: set a pilot's mission availability.
-func (s *Server) handlePilotStatus(w http.ResponseWriter, r *http.Request) {
-	if !s.canAccessDataset(r, "pilots") {
-		s.forbidden(w, r)
-		return
-	}
-	claims, _ := auth.ClaimsFromContext(r.Context())
-	by := ""
-	if claims != nil {
-		by = firstNonEmpty(claims.PreferredUsername, claims.Name, claims.Subject)
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/missions?error="+url.QueryEscape("invalid form"), http.StatusSeeOther)
+// handleDeckView renders a deck: every slide re-rendered from its live spec.
+func (s *Server) handleDeckView(w http.ResponseWriter, r *http.Request) {
+	if s.deck == nil {
+		http.Redirect(w, r, "/dashboard", http.StatusSeeOther)
 		return
 	}
 	id := r.PathValue("id")
-	status := r.PostFormValue("status")
-	note := r.PostFormValue("note")
-	// Preserve the operator's active filter across the edit redirect.
-	back := missionFilterQuery(missionFilter(r))
-
-	p, err := s.pilots.SetStatus(r.Context(), id, status, note, by)
-	if err != nil {
-		http.Redirect(w, r, "/missions?"+back+"&error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+	d, ok, err := s.deck.GetDeck(r.Context(), id)
+	if err != nil || !ok {
+		http.Error(w, "deck not found", http.StatusNotFound)
 		return
 	}
-	http.Redirect(w, r, "/missions?"+back+"&updated="+url.QueryEscape(p.PilotID), http.StatusSeeOther)
+	slides, _ := s.deck.Slides(r.Context(), id)
+	panels := make([]panel, 0, len(slides))
+	for _, sl := range slides {
+		panels = append(panels, s.renderSlidePanel(r.Context(), sl))
+	}
+	s.render(w, r, "deck.html", d.Name, "decks", map[string]any{
+		"Deck":   d,
+		"Panels": panels,
+		"Error":  r.URL.Query().Get("error"),
+	})
 }
 
-// handleMissionsSummary returns the readiness rollup as JSON (for the wheel).
-func (s *Server) handleMissionsSummary(w http.ResponseWriter, r *http.Request) {
-	if !s.canAccessDataset(r, "pilots") {
+func (s *Server) handleDeckDelete(w http.ResponseWriter, r *http.Request) {
+	if s.deck != nil {
+		if err := s.deck.DeleteDeck(r.Context(), r.PathValue("id")); err != nil {
+			http.Redirect(w, r, "/decks?error="+url.QueryEscape(err.Error()), http.StatusSeeOther)
+			return
+		}
+	}
+	http.Redirect(w, r, "/decks", http.StatusSeeOther)
+}
+
+func (s *Server) handleSlideDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.deck != nil {
+		_ = s.deck.DeleteSlide(r.Context(), r.PathValue("sid"))
+	}
+	http.Redirect(w, r, "/decks/"+id, http.StatusSeeOther)
+}
+
+// handlePublish publishes the current dataset view (filter + visualization) as a
+// slide on an existing deck, or a new deck if a name is given.
+func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
+	collection := r.PathValue("collection")
+	if !s.canAccessDataset(r, collection) {
 		s.forbidden(w, r)
 		return
 	}
-	summary, err := s.pilots.ReadinessSummary(r.Context())
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if s.deck == nil {
+		http.Redirect(w, r, "/datasets/"+collection, http.StatusSeeOther)
 		return
 	}
-	writeJSON(w, http.StatusOK, summary)
+	_ = r.ParseForm()
+	back := "/datasets/" + collection
+	if bq := r.PostFormValue("back"); bq != "" {
+		back = "/datasets/" + collection + "?" + bq
+	}
+	fail := func(msg string) { http.Redirect(w, r, back+"&error="+url.QueryEscape(msg), http.StatusSeeOther) }
+
+	deckID := r.PostFormValue("deck")
+	if newName := strings.TrimSpace(r.PostFormValue("new_deck")); newName != "" {
+		d, err := s.deck.CreateDeck(r.Context(), newName, s.effectiveUser(r))
+		if err != nil {
+			fail(err.Error())
+			return
+		}
+		deckID = d.ID
+	}
+	if deckID == "" {
+		fail("choose a deck or name a new one")
+		return
+	}
+	name, _, _, _ := s.loadDataset(r.Context(), collection)
+	_, err := s.deck.AddSlide(r.Context(), deck.Slide{
+		DeckID:      deckID,
+		Title:       r.PostFormValue("title"),
+		Collection:  collection,
+		DatasetName: name,
+		FilterCol:   r.PostFormValue("col"),
+		FilterVal:   r.PostFormValue("val"),
+		Query:       r.PostFormValue("q"),
+		ViewType:    r.PostFormValue("vtype"),
+		GroupBy:     r.PostFormValue("vgroup"),
+		ValueCol:    r.PostFormValue("vval"),
+		Agg:         r.PostFormValue("vagg"),
+		PublishedBy: s.effectiveUser(r),
+	})
+	if err != nil {
+		fail(err.Error())
+		return
+	}
+	http.Redirect(w, r, "/decks/"+deckID, http.StatusSeeOther)
 }
 
 // --- helpers ---
@@ -1689,6 +1891,11 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, name, title, nav
 	if _, ok := data["IsAdmin"]; !ok {
 		claims, _ := auth.ClaimsFromContext(r.Context())
 		data["IsAdmin"] = s.auth.IsAdmin(claims)
+	}
+	// Global "viewing as" banner so the persona is visible (and exitable) on
+	// every page, not just the dashboard.
+	if persona, active := s.previewUser(r); active {
+		data["Persona"] = persona
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.templates.ExecuteTemplate(w, "base.html", data); err != nil {

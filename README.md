@@ -130,6 +130,20 @@ The config is `{type, group_by (category/x), value_col (number), agg}`, stored
 per dataset in the operator registry and captured by saved views (so a view can
 pin a specific chart). Chart math lives in `internal/web/charts.go`.
 
+### Mesh discovery (synced data sources join the catalog)
+
+peat syncs document collections across the mesh, so a data source created on
+another node can land in this node's peat without the app having a local catalog
+record. **Discovery** closes that gap using the peat **document API**: the synced
+`data_sources` collection is the cross-node list of sources (read via
+`ListDocuments` + `GetDocument`), so reconcile reads it and registers each
+dataset-backed source into the catalog. Before surfacing one it confirms the
+dataset's data actually arrived with `GetDocument(<collection>, "__meta__")`
+(`dataset.Exists`) — so a source whose rows haven't synced yet isn't shown as
+subscribable. Runs automatically during catalog reconcile and on demand via
+**Sync from mesh** on `/catalog` (reports how many new sources it found). Lives in
+`reconcileDatasets` + `dataset.Exists`.
+
 ### Subscriptions (self-serve access)
 
 Access to a data source is **self-serve**: any authenticated user browses the
@@ -138,21 +152,44 @@ Subscribing is what grants access — the dataset then appears on their dashboar
 and they can open/visualize it; unsubscribing revokes it. There's no admin
 "assign datasets to users" step. Admins still create/delete data sources
 (under *Manage*) and register operator identities for the dashboard's
-*Viewing as* preview. Subscriptions are stored as the dataset's subscriber list
+*Viewing as* selector. Subscriptions are stored as the dataset's subscriber list
 in the peat mesh, so `canAccessDataset` = admin **or** subscribed.
+
+**Impersonation.** When an admin picks an operator in *Viewing as*, that persona
+is remembered in a cookie and a banner shows on every page. While active, the
+admin **impersonates** that user — subscribe/unsubscribe, saved views, and
+combined-source ownership all apply to the operator, not the admin. Exit returns
+to the admin's own identity.
 
 ### Combine data sources (join)
 
 Any user can **combine two data sources** into a virtual dataset by joining them
-on a shared key column (`/combine/new`). It's a **left join**: every row of the
+on a shared key column (`/combine/new`). The builder **auto-suggests** a shared
+key, shows a **live preview with a match count** ("✓ 42 of 50 rows matched") so
+you can tell immediately whether the keys line up, and offers an **only-keep-
+matched-rows** option. Key matching is **forgiving** — case- and
+whitespace-insensitive (so `Hill AFB` matches `hill afb`). It's a **left join**: every row of the
 first source is matched to the second by key (the second is used as a lookup —
 one row per key value; unmatched left rows keep blank right columns). Right
 columns that clash with a left column are prefixed with the right source's name.
 The combined source is **computed live at view time** (never stored), so it stays
 fresh as its members update, and it's a normal dataset everywhere else — listed
 in the catalog, subscribable, filterable, and chartable (e.g. *avg temp by base*
-over `pilots ⋈ weather`). It's **read-only** (derived). Members are generic
+over `roster ⋈ weather`). It's **read-only** (derived). Members are generic
 sources (file / weather / HTTP). Lives in `internal/combine/`.
+
+### Decks (publish visuals to a shared space)
+
+Turn the platform into a briefing space: from any dataset view, **Publish to a
+deck** captures the current filter + visualization as a **slide** on a shared
+**deck** (`/decks`). A deck is one scrollable page of everyone's published
+visuals — run a meeting from it, with each slide **re-rendered live** from
+current data when the deck is opened (a slide stores the view spec, not a frozen
+copy). Decks are shared: any authenticated user can create one, publish to it,
+and view it. A missing source degrades to a "source unavailable" note rather
+than breaking the deck. Lives in `internal/deck/` (decks + slides in peat); the
+visual itself is rendered by the shared `viz_panel` template, the same renderer
+the dataset view uses.
 
 ### Saved views
 
@@ -271,7 +308,7 @@ cluster), not part of this package.
 
 ```bash
 # Build the image, then create the package (pulls the image from your daemon).
-docker build -t keycloak-portal:0.1.23 .
+docker build -t keycloak-portal:0.1.30 .
 zarf package create deploy/zarf --confirm
 
 # On the target cluster (must be `zarf init`-ed), deploy with your values:
@@ -304,7 +341,7 @@ and the UDS Operator takes over the wiring:
   node and Keycloak.
 
 ```bash
-docker build -t keycloak-portal:0.1.23 .
+docker build -t keycloak-portal:0.1.30 .
 zarf package create deploy/zarf --confirm --output deploy/zarf
 uds create deploy/uds --confirm
 uds deploy uds-bundle-keycloak-portal-*.tar.zst --confirm \

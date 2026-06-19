@@ -157,6 +157,12 @@ func (s *Service) SetAssignments(ctx context.Context, key string, usernames []st
 	return s.store.PutDataset(ctx, d)
 }
 
+// DeleteDataset removes a dataset's registry entry (and thus all subscriptions
+// to it). Used when the underlying source is deleted.
+func (s *Service) DeleteDataset(ctx context.Context, key string) error {
+	return s.store.DeleteDataset(ctx, key)
+}
+
 // ListDatasets returns all registered datasets.
 func (s *Service) ListDatasets(ctx context.Context) ([]Dataset, error) {
 	return s.store.ListDatasets(ctx)

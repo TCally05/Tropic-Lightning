@@ -138,6 +138,15 @@ func (s *Service) Import(ctx context.Context, token, name, delimiter string, kee
 	return ImportResult{Collection: collection, Imported: limit, Total: total, Capped: limit < total}, nil
 }
 
+// Exists reports whether a dataset's data is actually present in the peat node —
+// it fetches the collection's __meta__ document (GetDocument). Used to confirm a
+// data source's dataset has really synced in before surfacing it in the catalog,
+// rather than registering a reference whose rows haven't arrived.
+func (s *Service) Exists(ctx context.Context, collection string) bool {
+	_, _, err := s.store.Meta(ctx, collection)
+	return err == nil
+}
+
 // View returns a dataset's display name, column order, and rows.
 func (s *Service) View(ctx context.Context, collection string) (string, []string, []Row, error) {
 	name, cols, err := s.store.Meta(ctx, collection)

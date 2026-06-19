@@ -2,13 +2,19 @@
 <div class="page-head toolbar">
   <div>
     <h1>Data sources</h1>
+    {{if .Preview}}
+    <p class="muted" style="margin:.2rem 0 0;">Impersonating this operator — subscribe/unsubscribe applies to <strong>them</strong>. They're subscribed to {{.MineCount}} of {{.TotalCount}}.</p>
+    {{else}}
     <p class="muted" style="margin:.2rem 0 0;">Subscribe to the data sources you work with — they'll appear on your dashboard and you'll be able to open them. You're subscribed to {{.MineCount}} of {{.TotalCount}}.</p>
+    {{end}}
   </div>
   <span class="spacer"></span>
+  <form method="POST" action="/catalog/sync" style="display:inline;"><button class="btn ghost sm" type="submit" title="Find data sources that synced in from other peat nodes">↻ Sync from mesh</button></form>
   <a class="btn ghost sm" href="/combine/new">+ Combine sources</a>
 </div>
 
 {{if .Error}}<div class="banner err">{{.Error}}</div>{{end}}
+{{if .Synced}}<div class="banner ok">{{if eq .Synced "0"}}No new data sources found in the mesh — the catalog is up to date.{{else}}Discovered {{.Synced}} new data source(s) from the mesh.{{end}}</div>{{end}}
 
 <div class="card">
   {{if .Items}}

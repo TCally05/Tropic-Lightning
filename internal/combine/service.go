@@ -32,10 +32,21 @@ func NewService(store Store, reader DatasetReader) *Service {
 
 // Input is the create form for a combined source.
 type Input struct {
-	Name  string
-	Owner string
-	Left  Member
-	Right Member
+	Name        string
+	Owner       string
+	Left        Member
+	Right       Member
+	OnlyMatched bool
+}
+
+// Result is a computed join: the columns, rows, and match statistics.
+type Result struct {
+	Name      string
+	Columns   []string
+	Rows      []dataset.Row
+	Matched   int // left rows that found a right match
+	Unmatched int // left rows with no match
+	Total     int // total left rows considered
 }
 
 // Create validates the spec (members exist, keys are real columns) and persists
@@ -72,16 +83,27 @@ func (s *Service) Create(ctx context.Context, in Input) (Combined, error) {
 		in.Right.Name = rname
 	}
 	c := Combined{
-		Key:   "cmb_" + slug(in.Name),
-		Name:  in.Name,
-		Owner: in.Owner,
-		Left:  in.Left,
-		Right: in.Right,
+		Key:         "cmb_" + slug(in.Name),
+		Name:        in.Name,
+		Owner:       in.Owner,
+		Left:        in.Left,
+		Right:       in.Right,
+		OnlyMatched: in.OnlyMatched,
 	}
 	if err := s.store.Put(ctx, c); err != nil {
 		return Combined{}, err
 	}
 	return c, nil
+}
+
+// Preview computes a join from an unsaved spec (for the builder's live preview).
+func (s *Service) Preview(ctx context.Context, in Input) (Result, error) {
+	if in.Left.Collection == "" || in.Right.Collection == "" || in.Left.Key == "" || in.Right.Key == "" {
+		return Result{}, ValidationError{"pick both sources and a key column in each"}
+	}
+	return s.computeFor(ctx, Combined{
+		Name: firstNonEmpty(in.Name, "Preview"), Left: in.Left, Right: in.Right, OnlyMatched: in.OnlyMatched,
+	})
 }
 
 // List returns all combined sources.
@@ -95,30 +117,36 @@ func (s *Service) Get(ctx context.Context, key string) (Combined, bool, error) {
 // Delete removes a combined source.
 func (s *Service) Delete(ctx context.Context, key string) error { return s.store.Delete(ctx, key) }
 
-// Compute performs the left join and returns the combined name, columns, and
-// rows. Right is reduced to one row per key value (first wins); right columns
-// that collide with a left column are prefixed with the right source's name.
-func (s *Service) Compute(ctx context.Context, key string) (string, []string, []dataset.Row, error) {
+// Compute performs the join for a saved combined source.
+func (s *Service) Compute(ctx context.Context, key string) (Result, error) {
 	c, ok, err := s.store.Get(ctx, key)
 	if err != nil {
-		return "", nil, nil, err
+		return Result{}, err
 	}
 	if !ok {
-		return "", nil, nil, ErrNotFound
+		return Result{}, ErrNotFound
 	}
+	return s.computeFor(ctx, c)
+}
+
+// computeFor left-joins Left with Right on their keys (forgiving match). Right is
+// reduced to one row per normalized key value (first wins); right columns that
+// collide with a left column are prefixed with the right source's name. Reports
+// match statistics; drops unmatched rows when OnlyMatched is set.
+func (s *Service) computeFor(ctx context.Context, c Combined) (Result, error) {
 	_, lcols, lrows, err := s.reader.View(ctx, c.Left.Collection)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("reading %q: %w", c.Left.Name, err)
+		return Result{}, fmt.Errorf("reading %q: %w", c.Left.Name, err)
 	}
 	_, rcols, rrows, err := s.reader.View(ctx, c.Right.Collection)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("reading %q: %w", c.Right.Name, err)
+		return Result{}, fmt.Errorf("reading %q: %w", c.Right.Name, err)
 	}
 
-	// Right lookup: one row of fields per key value (first wins).
+	// Right lookup keyed by the normalized join value (first row wins).
 	lookup := make(map[string]map[string]string, len(rrows))
 	for _, rr := range rrows {
-		k := rr.Fields[c.Right.Key]
+		k := normKey(rr.Fields[c.Right.Key])
 		if _, exists := lookup[k]; !exists {
 			lookup[k] = rr.Fields
 		}
@@ -144,13 +172,22 @@ func (s *Service) Compute(ctx context.Context, key string) (string, []string, []
 		cols = append(cols, disp)
 	}
 
-	rows := make([]dataset.Row, 0, len(lrows))
+	res := Result{Name: c.Name, Columns: cols, Total: len(lrows)}
+	res.Rows = make([]dataset.Row, 0, len(lrows))
 	for _, lr := range lrows {
+		match := lookup[normKey(lr.Fields[c.Left.Key])]
+		if match != nil {
+			res.Matched++
+		} else {
+			res.Unmatched++
+			if c.OnlyMatched {
+				continue
+			}
+		}
 		f := make(map[string]string, len(lr.Fields)+len(rextra))
 		for k, v := range lr.Fields {
 			f[k] = v
 		}
-		match := lookup[lr.Fields[c.Left.Key]]
 		for _, e := range rextra {
 			if match != nil {
 				f[e.disp] = match[e.src]
@@ -158,9 +195,19 @@ func (s *Service) Compute(ctx context.Context, key string) (string, []string, []
 				f[e.disp] = ""
 			}
 		}
-		rows = append(rows, dataset.Row{ID: lr.ID, Fields: f})
+		res.Rows = append(res.Rows, dataset.Row{ID: lr.ID, Fields: f})
 	}
-	return c.Name, cols, rows, nil
+	return res, nil
+}
+
+// firstNonEmpty returns the first non-empty string.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func contains(xs []string, x string) bool {

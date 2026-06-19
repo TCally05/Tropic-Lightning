@@ -53,26 +53,66 @@ func TestJoinCompute(t *testing.T) {
 		t.Errorf("key = %q", c.Key)
 	}
 
-	name, cols, rows, err := svc.Compute(ctx, c.Key)
+	res, err := svc.Compute(ctx, c.Key)
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
-	if name != "Pilots+Weather" {
-		t.Errorf("name = %q", name)
+	if res.Name != "Pilots+Weather" {
+		t.Errorf("name = %q", res.Name)
 	}
 	// Columns: left (id, base) + right extra (temp); right key 'base' dropped.
-	if len(cols) != 3 || cols[0] != "id" || cols[1] != "base" || cols[2] != "temp" {
-		t.Fatalf("cols = %v", cols)
+	if len(res.Columns) != 3 || res.Columns[0] != "id" || res.Columns[1] != "base" || res.Columns[2] != "temp" {
+		t.Fatalf("cols = %v", res.Columns)
 	}
-	if len(rows) != 3 {
-		t.Fatalf("rows = %d (left-join keeps all left rows)", len(rows))
+	if len(res.Rows) != 3 {
+		t.Fatalf("rows = %d (left-join keeps all left rows)", len(res.Rows))
+	}
+	if res.Matched != 2 || res.Unmatched != 1 || res.Total != 3 {
+		t.Errorf("stats matched=%d unmatched=%d total=%d, want 2/1/3", res.Matched, res.Unmatched, res.Total)
 	}
 	// Matched rows get the base's temp; unmatched left row gets blank.
-	if rows[0].Fields["temp"] != "31" || rows[1].Fields["temp"] != "31" {
-		t.Errorf("Hill rows temp = %q,%q want 31", rows[0].Fields["temp"], rows[1].Fields["temp"])
+	if res.Rows[0].Fields["temp"] != "31" || res.Rows[1].Fields["temp"] != "31" {
+		t.Errorf("Hill rows temp = %q,%q want 31", res.Rows[0].Fields["temp"], res.Rows[1].Fields["temp"])
 	}
-	if rows[2].Fields["base"] != "Edwards" || rows[2].Fields["temp"] != "" {
-		t.Errorf("unmatched row = %+v, want blank temp", rows[2].Fields)
+	if res.Rows[2].Fields["base"] != "Edwards" || res.Rows[2].Fields["temp"] != "" {
+		t.Errorf("unmatched row = %+v, want blank temp", res.Rows[2].Fields)
+	}
+}
+
+func TestForgivingKeyMatch(t *testing.T) {
+	r := fakeReader{
+		cols: map[string][]string{"a": {"base"}, "b": {"base", "temp"}},
+		rows: map[string][]dataset.Row{
+			"a": {row(map[string]string{"base": "Hill AFB"})},
+			"b": {row(map[string]string{"base": " hill   afb ", "temp": "31"})}, // case/space differ
+		},
+	}
+	svc := NewService(NewMemoryStore(), r)
+	ctx := context.Background()
+	c, _ := svc.Create(ctx, Input{Name: "AB", Left: Member{Collection: "a", Key: "base"}, Right: Member{Collection: "b", Name: "Wx", Key: "base"}})
+	res, err := svc.Compute(ctx, c.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Matched != 1 || res.Rows[0].Fields["temp"] != "31" {
+		t.Errorf("forgiving match failed: matched=%d row=%+v", res.Matched, res.Rows[0].Fields)
+	}
+}
+
+func TestOnlyMatchedDropsUnmatched(t *testing.T) {
+	svc, ctx := newSvc()
+	c, _ := svc.Create(ctx, Input{
+		Name: "PW", OnlyMatched: true,
+		Left:  Member{Collection: "pilots", Key: "base"},
+		Right: Member{Collection: "weather", Key: "base"},
+	})
+	res, err := svc.Compute(ctx, c.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Edwards (unmatched) dropped → only the 2 Hill rows remain.
+	if len(res.Rows) != 2 || res.Unmatched != 1 {
+		t.Errorf("only-matched rows=%d unmatched=%d, want 2 rows / 1 unmatched", len(res.Rows), res.Unmatched)
 	}
 }
 
@@ -90,16 +130,16 @@ func TestJoinColumnCollisionRenamed(t *testing.T) {
 	svc := NewService(NewMemoryStore(), r)
 	ctx := context.Background()
 	c, _ := svc.Create(ctx, Input{Name: "AB", Left: Member{Collection: "a", Key: "base"}, Right: Member{Collection: "b", Name: "Wx", Key: "base"}})
-	_, cols, rows, err := svc.Compute(ctx, c.Key)
+	res, err := svc.Compute(ctx, c.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// left status stays; right status renamed to wx_status.
-	if !containsCol(cols, "status") || !containsCol(cols, "wx_status") {
-		t.Fatalf("cols = %v, want status + wx_status", cols)
+	if !containsCol(res.Columns, "status") || !containsCol(res.Columns, "wx_status") {
+		t.Fatalf("cols = %v, want status + wx_status", res.Columns)
 	}
-	if rows[0].Fields["status"] != "ready" || rows[0].Fields["wx_status"] != "stormy" {
-		t.Errorf("row = %+v", rows[0].Fields)
+	if res.Rows[0].Fields["status"] != "ready" || res.Rows[0].Fields["wx_status"] != "stormy" {
+		t.Errorf("row = %+v", res.Rows[0].Fields)
 	}
 }
 

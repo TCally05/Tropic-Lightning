@@ -16,9 +16,9 @@ import (
 	"github.com/defenseunicorns/keycloak-portal/internal/combine"
 	"github.com/defenseunicorns/keycloak-portal/internal/dataset"
 	"github.com/defenseunicorns/keycloak-portal/internal/datasource"
+	"github.com/defenseunicorns/keycloak-portal/internal/deck"
 	"github.com/defenseunicorns/keycloak-portal/internal/httpsource"
 	"github.com/defenseunicorns/keycloak-portal/internal/operators"
-	"github.com/defenseunicorns/keycloak-portal/internal/pilots"
 	"github.com/defenseunicorns/keycloak-portal/internal/views"
 	"github.com/defenseunicorns/keycloak-portal/internal/weather"
 	"github.com/defenseunicorns/keycloak-portal/internal/web"
@@ -28,10 +28,9 @@ import (
 func newServer(t *testing.T, kc *authtest.Keycloak) http.Handler {
 	t.Helper()
 	ds := datasource.NewService(datasource.NewMemoryStore())
-	pl := pilots.NewService(pilots.NewMemoryStore(), ds, nil)
 	dsets := dataset.NewService(dataset.NewMemoryStore(), ds, nil)
 	ops := operators.NewService(operators.NewMemoryStore())
-	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pl, dsets, ops, nil, nil, nil, nil)
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsets, ops, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -496,126 +495,6 @@ func TestDataSourcesAccessibleViaAdminGroup(t *testing.T) {
 	}
 }
 
-func TestPilotsRequireAdmin(t *testing.T) {
-	kc := authtest.NewKeycloak(t)
-	defer kc.Close()
-	h := newServer(t, kc)
-
-	userTok := kc.SignToken(t, map[string]any{
-		"preferred_username": "bob",
-		"realm_access":       map[string]any{"roles": []string{"user"}},
-	})
-	req := httptest.NewRequest(http.MethodGet, "/pilots", nil)
-	req.Header.Set("Authorization", "Bearer "+userTok)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("non-admin /pilots = %d, want 403", rec.Code)
-	}
-}
-
-func TestPilotsImportAndList(t *testing.T) {
-	kc := authtest.NewKeycloak(t)
-	defer kc.Close()
-	h := newServer(t, kc)
-	tok := adminToken(t, kc)
-
-	// Import (form POST) -> redirect with imported count.
-	ireq := httptest.NewRequest(http.MethodPost, "/pilots/import", nil)
-	ireq.Header.Set("Authorization", "Bearer "+tok)
-	irec := httptest.NewRecorder()
-	h.ServeHTTP(irec, ireq)
-	if irec.Code != http.StatusSeeOther {
-		t.Fatalf("import status = %d, want 303", irec.Code)
-	}
-	if loc := irec.Header().Get("Location"); !strings.Contains(loc, "imported=") {
-		t.Errorf("redirect = %q, want imported=", loc)
-	}
-
-	// JSON list now returns pilots.
-	lreq := httptest.NewRequest(http.MethodGet, "/api/pilots", nil)
-	lreq.Header.Set("Authorization", "Bearer "+tok)
-	lrec := httptest.NewRecorder()
-	h.ServeHTTP(lrec, lreq)
-	if lrec.Code != http.StatusOK {
-		t.Fatalf("list status = %d", lrec.Code)
-	}
-	var list []pilots.Pilot
-	if err := json.Unmarshal(lrec.Body.Bytes(), &list); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(list) < 100 {
-		t.Errorf("listed %d pilots, want many", len(list))
-	}
-}
-
-// opServer builds a server with explicit pilots + operators services so tests
-// can pre-seed pilots and control assignments.
-func opServer(t *testing.T, kc *authtest.Keycloak, pstore *pilots.MemoryStore, ops *operators.Service) http.Handler {
-	t.Helper()
-	ds := datasource.NewService(datasource.NewMemoryStore())
-	pl := pilots.NewService(pstore, ds, nil)
-	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pl, dataset.NewService(dataset.NewMemoryStore(), ds, nil), ops, nil, nil, nil, nil)
-	if err != nil {
-		t.Fatalf("server: %v", err)
-	}
-	return srv.Routes()
-}
-
-func TestMissionsRequiresAssignment(t *testing.T) {
-	kc := authtest.NewKeycloak(t)
-	defer kc.Close()
-	ctx := context.Background()
-	ops := operators.NewService(operators.NewMemoryStore())
-	_ = ops.RegisterDataset(ctx, "pilots", "USAF Pilots", operators.KindPilots, "pilots")
-	h := opServer(t, kc, pilots.NewMemoryStore(), ops)
-
-	tok := kc.SignToken(t, map[string]any{"preferred_username": "s1", "realm_access": map[string]any{"roles": []string{"user"}}})
-	do := func() int {
-		req := httptest.NewRequest(http.MethodGet, "/missions", nil)
-		req.Header.Set("Authorization", "Bearer "+tok)
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
-		return rec.Code
-	}
-	// Unassigned operator is denied.
-	if code := do(); code != http.StatusForbidden {
-		t.Errorf("unassigned /missions = %d, want 403", code)
-	}
-	// After assignment, allowed.
-	_ = ops.SetAssignments(ctx, "pilots", []string{"s1"})
-	if code := do(); code != http.StatusOK {
-		t.Errorf("assigned /missions = %d, want 200", code)
-	}
-}
-
-func TestOperatorCanEditPilotStatus(t *testing.T) {
-	kc := authtest.NewKeycloak(t)
-	defer kc.Close()
-	ctx := context.Background()
-	pstore := pilots.NewMemoryStore()
-	_ = pstore.Put(ctx, pilots.Pilot{PilotID: "P0001", MissionStatus: pilots.StatusAvailable})
-	ops := operators.NewService(operators.NewMemoryStore())
-	_ = ops.RegisterDataset(ctx, "pilots", "USAF Pilots", operators.KindPilots, "pilots")
-	_ = ops.SetAssignments(ctx, "pilots", []string{"s1"})
-	h := opServer(t, kc, pstore, ops)
-
-	tok := kc.SignToken(t, map[string]any{"preferred_username": "s1", "realm_access": map[string]any{"roles": []string{"user"}}})
-	form := url.Values{"status": {"grounded"}, "note": {"sick"}}
-	req := httptest.NewRequest(http.MethodPost, "/pilots/P0001/status", strings.NewReader(form.Encode()))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status edit = %d, want 303", rec.Code)
-	}
-	got, _ := pstore.Get(ctx, "P0001")
-	if got.Available() || got.StatusBy != "s1" || got.StatusNote != "sick" {
-		t.Errorf("pilot after edit = %+v", got)
-	}
-}
-
 func TestDashboardAdminViewSelector(t *testing.T) {
 	kc := authtest.NewKeycloak(t)
 	defer kc.Close()
@@ -658,35 +537,6 @@ func TestDashboardAdminViewSelector(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Your data sources") {
 		t.Error("non-admin dashboard should show the operator 'Your data sources' card")
-	}
-}
-
-func TestMissionsFilterByBase(t *testing.T) {
-	kc := authtest.NewKeycloak(t)
-	defer kc.Close()
-	pstore := pilots.NewMemoryStore()
-	ctx := context.Background()
-	_ = pstore.Put(ctx, pilots.Pilot{PilotID: "P1", Base: "Hill AFB", Aircraft: "F-16", MissionStatus: pilots.StatusAvailable})
-	_ = pstore.Put(ctx, pilots.Pilot{PilotID: "P2", Base: "Nellis AFB", Aircraft: "F-16", MissionStatus: pilots.StatusAvailable})
-	ops := operators.NewService(operators.NewMemoryStore())
-	_ = ops.RegisterDataset(ctx, "pilots", "USAF Pilots", operators.KindPilots, "pilots")
-	_ = ops.SetAssignments(ctx, "pilots", []string{"s1"})
-	h := opServer(t, kc, pstore, ops)
-	tok := kc.SignToken(t, map[string]any{"preferred_username": "s1", "realm_access": map[string]any{"roles": []string{"user"}}})
-
-	req := httptest.NewRequest(http.MethodGet, "/missions?base=Hill+AFB", nil)
-	req.Header.Set("Authorization", "Bearer "+tok)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "P1") {
-		t.Error("Hill AFB pilot P1 should be listed")
-	}
-	if strings.Contains(body, ">P2<") || strings.Contains(body, "/pilots/P2/status") {
-		t.Error("Nellis pilot P2 should be filtered out")
 	}
 }
 
@@ -766,44 +616,18 @@ func TestUploadRequiresAdmin(t *testing.T) {
 	}
 }
 
-func TestAdminPreviewSpecificOperator(t *testing.T) {
-	kc := authtest.NewKeycloak(t)
-	defer kc.Close()
-	ctx := context.Background()
-	ops := operators.NewService(operators.NewMemoryStore())
-	_, _ = ops.CreateOperator(ctx, "s4", "Op Four")
-	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
-	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
-	h := opServer(t, kc, pilots.NewMemoryStore(), ops)
-
-	adminTok := kc.SignToken(t, map[string]any{"preferred_username": "alice", "groups": []string{"/UDS Core/Admin"}})
-	req := httptest.NewRequest(http.MethodGet, "/dashboard?view=operator&as=s4", nil)
-	req.AddCookie(&http.Cookie{Name: auth.AccessTokenCookie, Value: adminTok})
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d", rec.Code)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "/datasets/ds_roster") {
-		t.Error("previewing s4 should show their assigned dataset link")
-	}
-	if !strings.Contains(body, "s4") {
-		t.Error("preview should indicate operator s4")
-	}
-}
-
 func TestCatalogReconcilesUploadedDatasets(t *testing.T) {
 	kc := authtest.NewKeycloak(t)
 	defer kc.Close()
 	ctx := context.Background()
 	ds := datasource.NewService(datasource.NewMemoryStore())
-	// A dataset present only as a catalog entry (dataset:// endpoint).
+	dstore := dataset.NewMemoryStore()
+	// A data source with its dataset present in the node (catalog doc + rows).
 	_, _ = ds.Create(ctx, datasource.Input{Name: "Roster", Type: "file", Endpoint: "dataset://ds_roster", Enabled: true})
+	_ = dstore.PutMeta(ctx, "ds_roster", "Roster", []string{"name"})
 	ops := operators.NewService(operators.NewMemoryStore())
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil),
-		dataset.NewService(dataset.NewMemoryStore(), ds, nil), ops, nil, nil, nil, nil)
+		dataset.NewService(dstore, ds, nil), ops, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -835,7 +659,7 @@ func TestSelfSubscribeGrantsAccess(t *testing.T) {
 	dsvc := dataset.NewService(dstore, ds, nil)
 	ops := operators.NewService(operators.NewMemoryStore())
 	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
-	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, nil, nil)
 	h := srv.Routes()
 	tok := kc.SignToken(t, map[string]any{"preferred_username": "s1", "realm_access": map[string]any{"roles": []string{"user"}}})
 	req := func(method, target string) *httptest.ResponseRecorder {
@@ -887,7 +711,7 @@ func TestOperatorCanEditAssignedDataset(t *testing.T) {
 	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
+		dsvc, ops, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -939,7 +763,7 @@ func TestOperatorUpdatesExistingRow(t *testing.T) {
 	ops := operators.NewService(operators.NewMemoryStore())
 	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
 	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
-	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, nil, nil)
 	h := srv.Routes()
 
 	tok := kc.SignToken(t, map[string]any{"preferred_username": "s4", "realm_access": map[string]any{"roles": []string{"user"}}})
@@ -974,7 +798,7 @@ func TestOperatorBulkSave(t *testing.T) {
 	ops := operators.NewService(operators.NewMemoryStore())
 	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
 	_ = ops.SetAssignments(ctx, "ds_roster", []string{"s4"})
-	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, nil, nil)
 	h := srv.Routes()
 
 	body := `{"rows":[{"id":"r000001","fields":{"name":"Alice","status":"grounded"}},{"id":"","fields":{"name":"Bob","status":"ok"}}],"deletes":[]}`
@@ -1066,7 +890,7 @@ func TestDatasetStatusWheel(t *testing.T) {
 	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
+		dsvc, ops, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1117,7 +941,7 @@ func TestWeatherConnectorCreateFlow(t *testing.T) {
 	wx.SetBaseURL(api.URL)
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, wx, nil, nil, nil)
+		dsvc, ops, wx, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1176,7 +1000,7 @@ func TestHTTPSourceCreateAndRefresh(t *testing.T) {
 	hs := httpsource.NewService(httpsource.NewMemoryStore(), dstore, nil)
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, hs, nil, nil)
+		dsvc, ops, nil, hs, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1234,7 +1058,7 @@ func TestSavedViewsFlow(t *testing.T) {
 	vw := views.NewService(views.NewMemoryStore())
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, vw, nil)
+		dsvc, ops, nil, nil, vw, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1338,7 +1162,7 @@ func TestSavedViewsSwitch(t *testing.T) {
 	ready, _ := vw.Save(ctx, views.View{Owner: "alice", Collection: "ds_x", Name: "Ready", FilterCol: "status", FilterVal: "ready"})
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, vw, nil)
+		dsvc, ops, nil, nil, vw, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1388,7 +1212,7 @@ func TestDatasetBarAndStats(t *testing.T) {
 	_ = ops.RegisterDataset(ctx, "ds_r", "Roster", operators.KindGeneric, "ds_r")
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
+		dsvc, ops, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1435,7 +1259,7 @@ func TestVizSwitchApplies(t *testing.T) {
 	ops := operators.NewService(operators.NewMemoryStore())
 	_ = ops.RegisterDataset(ctx, "ds_r", "R", operators.KindGeneric, "ds_r")
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, nil)
+		dsvc, ops, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1486,7 +1310,7 @@ func TestCombineSourcesFlow(t *testing.T) {
 	cmb := combine.NewService(combine.NewMemoryStore(), dsvc)
 
 	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
-		pilots.NewService(pilots.NewMemoryStore(), ds, nil), dsvc, ops, nil, nil, nil, cmb)
+		dsvc, ops, nil, nil, nil, cmb, nil)
 	if err != nil {
 		t.Fatalf("server: %v", err)
 	}
@@ -1538,5 +1362,314 @@ func TestCombineSourcesFlow(t *testing.T) {
 	// It appears in the catalog as a combined source.
 	if _, cat, _ := get("/catalog"); !strings.Contains(cat, "cmb_pw") || !strings.Contains(cat, "combined") {
 		t.Error("combined source should be listed in the catalog")
+	}
+}
+
+// TestViewAsPersonaInCatalog verifies an admin's "viewing as" persona carries
+// into the catalog: it shows the assumed operator's subscriptions (read-only),
+// not the admin's own.
+func TestViewAsPersonaInCatalog(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	_ = dstore.PutMeta(ctx, "ds_roster", "Roster", []string{"name"})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
+	_, _ = ops.CreateOperator(ctx, "s4", "Op Four")
+	// s4 is subscribed; the admin (alice) is NOT.
+	_ = ops.Subscribe(ctx, "ds_roster", "s4")
+
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds,
+		dsvc, ops, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	h := srv.Routes()
+	admin := kc.SignToken(t, map[string]any{"preferred_username": "alice", "groups": []string{"/UDS Core/Admin"}})
+
+	// Pick up the persona by visiting the dashboard as that operator.
+	dreq := httptest.NewRequest(http.MethodGet, "/dashboard?view=operator&as=s4", nil)
+	dreq.Header.Set("Authorization", "Bearer "+admin)
+	drec := httptest.NewRecorder()
+	h.ServeHTTP(drec, dreq)
+	var cookie *http.Cookie
+	for _, c := range drec.Result().Cookies() {
+		if c.Name == "view_as" {
+			cookie = c
+		}
+	}
+	if cookie == nil || cookie.Value != "s4" {
+		t.Fatalf("dashboard should set view_as=s4 cookie, got %v", cookie)
+	}
+
+	// The catalog, carrying that cookie, reflects s4's subscriptions + a banner.
+	creq := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+	creq.Header.Set("Authorization", "Bearer "+admin)
+	creq.AddCookie(cookie)
+	crec := httptest.NewRecorder()
+	h.ServeHTTP(crec, creq)
+	body := crec.Body.String()
+	if !strings.Contains(body, "Impersonating") || !strings.Contains(body, "s4") {
+		t.Error("catalog should show the 'Impersonating s4' banner")
+	}
+	if !strings.Contains(body, "to 1 of") {
+		t.Errorf("catalog should reflect s4's subscriptions (1), not the admin's (0)")
+	}
+	// Impersonating: actions apply to s4. Unsubscribing here removes s4 (not admin).
+	ureq := httptest.NewRequest(http.MethodPost, "/catalog/ds_roster/unsubscribe", nil)
+	ureq.Header.Set("Authorization", "Bearer "+admin)
+	ureq.AddCookie(cookie)
+	h.ServeHTTP(httptest.NewRecorder(), ureq)
+	if ops.IsAssigned(ctx, "ds_roster", "s4") {
+		t.Error("unsubscribing while impersonating should remove s4's subscription")
+	}
+	// Re-subscribe while impersonating re-adds s4 (not the admin).
+	sreq := httptest.NewRequest(http.MethodPost, "/catalog/ds_roster/subscribe", nil)
+	sreq.Header.Set("Authorization", "Bearer "+admin)
+	sreq.AddCookie(cookie)
+	h.ServeHTTP(httptest.NewRecorder(), sreq)
+	if !ops.IsAssigned(ctx, "ds_roster", "s4") || ops.IsAssigned(ctx, "ds_roster", "alice") {
+		t.Error("subscribing while impersonating should add s4, not the admin")
+	}
+
+	// Exiting (view=admin) clears the persona cookie.
+	xreq := httptest.NewRequest(http.MethodGet, "/dashboard?view=admin", nil)
+	xreq.Header.Set("Authorization", "Bearer "+admin)
+	xreq.AddCookie(cookie)
+	xrec := httptest.NewRecorder()
+	h.ServeHTTP(xrec, xreq)
+	cleared := false
+	for _, c := range xrec.Result().Cookies() {
+		if c.Name == "view_as" && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("view=admin should clear the persona cookie")
+	}
+}
+
+// TestCombineDeleteRemovesFromCatalog guards the bug where deleting a combined
+// source left its catalog/registry entry behind (so it "couldn't be deleted").
+func TestCombineDeleteRemovesFromCatalog(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	_ = dstore.PutMeta(ctx, "ds_a", "A", []string{"base", "x"})
+	_ = dstore.PutRow(ctx, "ds_a", "r1", map[string]string{"base": "Hill", "x": "1"})
+	_ = dstore.PutMeta(ctx, "ds_b", "B", []string{"base", "y"})
+	_ = dstore.PutRow(ctx, "ds_b", "r1", map[string]string{"base": "Hill", "y": "2"})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_a", "A", operators.KindGeneric, "ds_a")
+	_ = ops.RegisterDataset(ctx, "ds_b", "B", operators.KindGeneric, "ds_b")
+	cmb := combine.NewService(combine.NewMemoryStore(), dsvc)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, cmb, nil)
+	h := srv.Routes()
+	tok := adminToken(t, kc)
+	post := func(target string) {
+		r := httptest.NewRequest(http.MethodPost, target, nil)
+		r.Header.Set("Authorization", "Bearer "+tok)
+		h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	catalog := func() string {
+		r := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+		r.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Body.String()
+	}
+
+	form := url.Values{"name": {"AB"}, "left": {"ds_a"}, "left_key": {"base"}, "right": {"ds_b"}, "right_key": {"base"}}
+	cr := httptest.NewRequest(http.MethodPost, "/combine", strings.NewReader(form.Encode()))
+	cr.Header.Set("Authorization", "Bearer "+tok)
+	cr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	h.ServeHTTP(httptest.NewRecorder(), cr)
+	if !strings.Contains(catalog(), "cmb_ab") {
+		t.Fatal("combined source should appear in the catalog after create")
+	}
+	// Delete it — it must disappear from the catalog (registry entry removed too).
+	post("/combine/cmb_ab/delete")
+	if strings.Contains(catalog(), "cmb_ab") {
+		t.Error("combined source should be gone from the catalog after delete")
+	}
+	if _, ok, _ := cmb.Get(ctx, "cmb_ab"); ok {
+		t.Error("combined spec should be deleted")
+	}
+}
+
+func TestCombinePreviewAndForgivingMatch(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	// Keys differ only by case/spacing — forgiving matching should still link them.
+	_ = dstore.PutMeta(ctx, "ds_roster", "Roster", []string{"name", "base"})
+	_ = dstore.PutRow(ctx, "ds_roster", "r1", map[string]string{"name": "A", "base": "Hill AFB"})
+	_ = dstore.PutRow(ctx, "ds_roster", "r2", map[string]string{"name": "B", "base": "Edwards"})
+	_ = dstore.PutMeta(ctx, "ds_wx", "Weather", []string{"base", "temp"})
+	_ = dstore.PutRow(ctx, "ds_wx", "w1", map[string]string{"base": "hill afb", "temp": "31"})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_roster", "Roster", operators.KindGeneric, "ds_roster")
+	_ = ops.RegisterDataset(ctx, "ds_wx", "Weather", operators.KindGeneric, "ds_wx")
+	cmb := combine.NewService(combine.NewMemoryStore(), dsvc)
+	srv, _ := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, cmb, nil)
+	h := srv.Routes()
+	tok := adminToken(t, kc)
+
+	// Preview: 1 of 2 rows match despite case/space differences.
+	form := url.Values{"left": {"ds_roster"}, "left_key": {"base"}, "right": {"ds_wx"}, "right_key": {"base"}}
+	pr := httptest.NewRequest(http.MethodPost, "/combine/preview", strings.NewReader(form.Encode()))
+	pr.Header.Set("Authorization", "Bearer "+tok)
+	pr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	prr := httptest.NewRecorder()
+	h.ServeHTTP(prr, pr)
+	var pv struct {
+		Matched, Unmatched, Total int
+		Info                      string
+	}
+	_ = json.Unmarshal(prr.Body.Bytes(), &pv)
+	if pv.Matched != 1 || pv.Total != 2 {
+		t.Fatalf("preview matched=%d total=%d, want 1/2 (forgiving match)", pv.Matched, pv.Total)
+	}
+
+	// Create + open: the combined view shows the match banner with temp populated.
+	cform := url.Values{"name": {"RW"}, "left": {"ds_roster"}, "left_key": {"base"}, "right": {"ds_wx"}, "right_key": {"base"}}
+	cr := httptest.NewRequest(http.MethodPost, "/combine", strings.NewReader(cform.Encode()))
+	cr.Header.Set("Authorization", "Bearer "+tok)
+	cr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	crr := httptest.NewRecorder()
+	h.ServeHTTP(crr, cr)
+	vr := httptest.NewRequest(http.MethodGet, "/datasets/cmb_rw", nil)
+	vr.Header.Set("Authorization", "Bearer "+tok)
+	vrr := httptest.NewRecorder()
+	h.ServeHTTP(vrr, vr)
+	body := vrr.Body.String()
+	if !strings.Contains(body, "1 of 2 rows matched") || !strings.Contains(body, ">31<") {
+		t.Errorf("combined view should show match info + the joined temp value")
+	}
+}
+
+func TestPublishToDeckFlow(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+	_ = dstore.PutMeta(ctx, "ds_r", "Roster", []string{"name", "status"})
+	_ = dstore.PutRow(ctx, "ds_r", "r1", map[string]string{"name": "A", "status": "ready"})
+	_ = dstore.PutRow(ctx, "ds_r", "r2", map[string]string{"name": "B", "status": "down"})
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore())
+	_ = ops.RegisterDataset(ctx, "ds_r", "Roster", operators.KindGeneric, "ds_r")
+	dk := deck.NewService(deck.NewMemoryStore())
+
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, nil, dk)
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	h := srv.Routes()
+	tok := adminToken(t, kc)
+
+	// Publish a status-wheel view filtered to status=down into a brand-new deck.
+	form := url.Values{
+		"title": {"Down roster"}, "new_deck": {"Sync"},
+		"col": {"status"}, "val": {"down"},
+		"vtype": {"wheel"}, "vgroup": {"status"},
+	}
+	pr := httptest.NewRequest(http.MethodPost, "/datasets/ds_r/publish", strings.NewReader(form.Encode()))
+	pr.Header.Set("Authorization", "Bearer "+tok)
+	pr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	prr := httptest.NewRecorder()
+	h.ServeHTTP(prr, pr)
+	loc := prr.Header().Get("Location")
+	if prr.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "/decks/dk") {
+		t.Fatalf("publish = %d -> %q", prr.Code, loc)
+	}
+
+	// The deck renders the published visual live (wheel grouped by status, only
+	// the filtered 'down' row → 1 segment).
+	dr := httptest.NewRequest(http.MethodGet, loc, nil)
+	dr.Header.Set("Authorization", "Bearer "+tok)
+	drr := httptest.NewRecorder()
+	h.ServeHTTP(drr, dr)
+	body := drr.Body.String()
+	if !strings.Contains(body, "Down roster") || !strings.Contains(body, "conic-gradient") {
+		t.Error("deck should render the published wheel visual")
+	}
+	if !strings.Contains(body, ">down<") || strings.Contains(body, ">ready<") {
+		t.Error("published slide should honor the saved filter (down only)")
+	}
+
+	// The deck is listed for everyone.
+	lr := httptest.NewRequest(http.MethodGet, "/decks", nil)
+	lr.Header.Set("Authorization", "Bearer "+tok)
+	lrr := httptest.NewRecorder()
+	h.ServeHTTP(lrr, lr)
+	if !strings.Contains(lrr.Body.String(), "Sync") {
+		t.Error("decks page should list the new deck")
+	}
+}
+
+func TestDiscoverSyncedDatasetIntoCatalog(t *testing.T) {
+	kc := authtest.NewKeycloak(t)
+	defer kc.Close()
+	ctx := context.Background()
+	ds := datasource.NewService(datasource.NewMemoryStore())
+	dstore := dataset.NewMemoryStore()
+
+	// A data source synced in from a peer: its catalog doc lives in `data_sources`
+	// and its dataset rows arrived too. The app has no registry entry yet.
+	_, _ = ds.Create(ctx, datasource.Input{Name: "Synced Roster", Type: "file", Endpoint: "dataset://ds_synced", Enabled: true})
+	_ = dstore.PutMeta(ctx, "ds_synced", "Synced Roster", []string{"name"})
+	_ = dstore.PutRow(ctx, "ds_synced", "r1", map[string]string{"name": "A"})
+
+	// A second data source whose dataset rows have NOT synced yet (no __meta__):
+	// it must NOT be surfaced — that's the GetDocument existence guard.
+	_, _ = ds.Create(ctx, datasource.Input{Name: "Pending", Type: "file", Endpoint: "dataset://ds_pending", Enabled: true})
+
+	dsvc := dataset.NewService(dstore, ds, nil)
+	ops := operators.NewService(operators.NewMemoryStore()) // registry empty
+	srv, err := web.NewServer(kc.Authenticator(t), kc.Config(), ds, dsvc, ops, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("server: %v", err)
+	}
+	h := srv.Routes()
+	tok := adminToken(t, kc)
+
+	// "Sync from mesh" discovers the landed dataset (count = 1), not the pending one.
+	sr := httptest.NewRequest(http.MethodPost, "/catalog/sync", nil)
+	sr.Header.Set("Authorization", "Bearer "+tok)
+	srr := httptest.NewRecorder()
+	h.ServeHTTP(srr, sr)
+	if loc := srr.Header().Get("Location"); loc != "/catalog?synced=1" {
+		t.Fatalf("sync redirect = %q, want /catalog?synced=1", loc)
+	}
+	// It appears in the catalog, subscribable; the not-yet-synced one does not.
+	cr := httptest.NewRequest(http.MethodGet, "/catalog", nil)
+	cr.Header.Set("Authorization", "Bearer "+tok)
+	crr := httptest.NewRecorder()
+	h.ServeHTTP(crr, cr)
+	body := crr.Body.String()
+	if !strings.Contains(body, "Synced Roster") || !strings.Contains(body, "/catalog/ds_synced/subscribe") {
+		t.Error("a synced dataset whose data landed should appear in the catalog")
+	}
+	if strings.Contains(body, "ds_pending") {
+		t.Error("a referenced dataset whose rows haven't synced must not be surfaced")
+	}
+	// A user can subscribe to the discovered dataset → access granted.
+	subr := httptest.NewRequest(http.MethodPost, "/catalog/ds_synced/subscribe", nil)
+	utok := kc.SignToken(t, map[string]any{"preferred_username": "s1", "realm_access": map[string]any{"roles": []string{"user"}}})
+	subr.Header.Set("Authorization", "Bearer "+utok)
+	h.ServeHTTP(httptest.NewRecorder(), subr)
+	if !ops.IsAssigned(ctx, "ds_synced", "s1") {
+		t.Error("user should be able to subscribe to a discovered dataset")
 	}
 }

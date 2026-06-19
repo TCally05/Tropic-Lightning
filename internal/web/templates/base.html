@@ -36,6 +36,9 @@
     .mesh { display:inline-flex; align-items:center; gap:.4rem; font-size:.8rem; color:var(--muted); font-weight:600; }
     .user { font-size:.85rem; color:var(--text); font-weight:600; }
     @media (max-width:720px){ .nav-links{ display:none; } .user{ display:none; } }
+    .persona-bar { background:var(--amber-weak); color:var(--amber); border-bottom:1px solid #f0dca6; font-size:.85rem; font-weight:600;
+      display:flex; gap:1rem; align-items:center; justify-content:center; padding:.5rem 1rem; }
+    .persona-bar a { color:var(--amber); text-decoration:underline; }
 
     /* ---- layout ---- */
     .container { max-width:1080px; margin:0 auto; padding:1.75rem 1.25rem 4rem; }
@@ -110,11 +113,10 @@
       <nav class="nav-links">
         <a href="/dashboard" class="{{if eq .Nav "dashboard"}}active{{end}}">Dashboard</a>
         <a href="/catalog" class="{{if eq .Nav "catalog"}}active{{end}}">Data sources</a>
-        <a href="/missions" class="{{if eq .Nav "missions"}}active{{end}}">Missions</a>
+        <a href="/decks" class="{{if eq .Nav "decks"}}active{{end}}">Decks</a>
         {{if .IsAdmin}}
         <a href="/datasources" class="{{if eq .Nav "datasources"}}active{{end}}">Manage</a>
         <a href="/operators" class="{{if eq .Nav "operators"}}active{{end}}">Operators</a>
-        <a href="/pilots" class="{{if eq .Nav "pilots"}}active{{end}}">Pilots</a>
         {{end}}
       </nav>
       <div class="nav-right">
@@ -125,6 +127,12 @@
       {{end}}
     </div>
   </header>
+  {{if .Persona}}
+  <div class="persona-bar">
+    <span>Impersonating <strong>{{.Persona}}</strong> — subscriptions, saved views, and edits apply to them.</span>
+    <a href="/dashboard?view=admin">Exit</a>
+  </div>
+  {{end}}
   <main class="container">
     {{ partial .Content . }}
   </main>

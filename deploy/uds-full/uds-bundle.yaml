@@ -1,14 +1,43 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/defenseunicorns/uds-cli/refs/heads/main/uds.schema.json
+#
+# Full, self-contained stack for transport / air-gap: the UDS Zarf init, UDS Core
+# (slim-dev), and the keycloak-portal app — in one bundle, deployed in order.
+#
+# Use this when you want to stand the whole platform up from nothing (e.g. a
+# fresh k3s on a laptop). If UDS init + Core are ALREADY on the cluster, use the
+# app-only bundle at ../uds instead.
+#
+# Build (run from this directory; build the app image first):
+#   docker build -t keycloak-portal:0.1.30 ../..
+#   uds create . --architecture amd64 --confirm      # or arm64
+# Deploy:
+#   uds deploy uds-bundle-keycloak-portal-stack-*.tar.zst --confirm \
+#     --set DOMAIN=uds.dev --set PORTAL_HOST=portal
 kind: UDSBundle
 metadata:
-  name: keycloak-portal
+  name: keycloak-portal-stack
   description: >-
-    Keycloak OIDC portal with peat-backed, edge/disconnected data sources.
-    App-only bundle: it layers onto an existing UDS platform (Zarf init and
-    UDS Core / Istio / Keycloak / UDS Operator must already be deployed).
+    Transportable stack — UDS init + UDS Core (slim-dev) + the Keycloak OIDC
+    portal with peat-backed, edge/disconnected data sources.
   version: "0.1.30"
 
 packages:
+  # 1) UDS-flavored Zarf init: in-cluster registry, Zarf agent, etc.
+  - name: init
+    repository: ghcr.io/zarf-dev/packages/init
+    ref: v0.77.0
+
+  # 2) UDS Core (slim-dev): Istio + Keycloak (SSO) + Pepr/UDS Operator — the
+  #    platform pieces the portal depends on. Lighter than full Core; good for
+  #    local/single-node. DOMAIN defaults to uds.dev; override to match the app.
+  - name: core-slim-dev
+    repository: registry.defenseunicorns.com/public/core
+    ref: 1.6.0-registry1
+
+  - name: peat-node
+    path: .
+    ref: 0.3.3
+  # 3) The application (built from the local Zarf package at deploy/zarf).
   - name: keycloak-portal
     path: ../zarf
     ref: 0.1.30
@@ -30,7 +59,7 @@ packages:
               default: "portal"
             - name: DOMAIN
               path: uds.expose.domain
-              description: "Cluster domain UDS appends to the host; used to build the OIDC redirect URLs"
+              description: "Cluster domain UDS appends to the host. Must match Core's DOMAIN."
               default: "uds.dev"
             - name: GATEWAY
               path: uds.expose.gateway
